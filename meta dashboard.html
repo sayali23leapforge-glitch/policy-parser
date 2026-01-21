@@ -607,11 +607,17 @@
                 this.initDatePickers(); // Init global pickers like view date
                 this.setupDateShortcuts(); // Init date shortcuts
 
-                // Only fetch leads from Facebook API, not from database
-                console.log('🔄 Fetching leads from Facebook API...');
-                await this.syncFromFacebook(); // Initial load from Facebook
+                // Load all leads (manual and Facebook) from database
+                console.log('📞 Loading leads from database (instant)...');
+                await this.loadLeadsFromDatabase();
+                this.sortLeadsByDate();
+                this.renderAll();
+                this.updateStats();
                 this.startAutoRefresh(); // Then every 30 seconds
                 console.log('✅ Dashboard init() completed');
+            }
+            sortLeadsByDate() {
+                this.state.leads.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
             }
 
             startAutoRefresh() {
@@ -630,29 +636,14 @@
                         headers: { 'Content-Type': 'application/json' }
                     });
                     const result = await response.json();
-                    
                     this.updateLastSyncTime(); // Update sync time indicator
-                    
-                    if (result.success && result.leads && result.leads.length > 0) {
-                        console.log(`✨ Got ${result.leads.length} new leads from Facebook!`);
-                        
-                        // Find truly new leads (not already in our state)
-                        const existingIds = new Set(this.state.leads.map(l => l.id));
-                        const newLeads = result.leads.filter(l => !existingIds.has(l.id));
-                        
-                        if (newLeads.length > 0) {
-                            // Add new leads to the TOP of the list
-                            this.state.leads = [...newLeads, ...this.state.leads];
-                            
-                            // Re-render and update stats
-                            this.renderAll();
-                            this.updateStats();
-                            
-                            // Show notification
-                            this.showToast(`${newLeads.length} new lead(s) from Facebook!`, 'success');
-                        } else {
-                            console.log('✅ Facebook sync complete, no new leads');
-                        }
+                    if (result.success) {
+                        // After syncing, reload all leads from database (manual + Facebook)
+                        await this.loadLeadsFromDatabase();
+                        this.sortLeadsByDate();
+                        this.renderAll();
+                        this.updateStats();
+                        this.showToast(result.message || 'Leads synced from Facebook', 'success');
                     } else {
                         console.log('✅ Facebook sync complete, no new leads');
                     }
