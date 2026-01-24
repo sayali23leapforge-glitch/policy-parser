@@ -24,7 +24,7 @@ from supabase import create_client, Client
 import hmac
 import hashlib
 # Import pdf_parser using relative import
-from pdf_parser import parse_mvr_pdf, parse_dash_pdf
+from .pdf_parser import parse_mvr_pdf, parse_dash_pdf
 
 # Load environment variables
 load_dotenv(os.path.join(os.path.dirname(__file__), '../.env.local'))
