@@ -275,6 +275,7 @@ def extract_dash_fields(text):
         
         if policy_matches:
             # Store ALL policies for gap calculation
+            # IMPORTANT: Preserve the order from the PDF (data source) - DO NOT SORT
             all_policies = []
             for match in policy_matches:
                 policy = {
@@ -284,30 +285,30 @@ def extract_dash_fields(text):
                 }
                 all_policies.append(policy)
             
-            # Sort by policy number to ensure correct order
-            all_policies.sort(key=lambda x: x['number'])
+            # STRICT REQUIREMENT: DO NOT SORT - use order provided by data source
+            # The order of appearance in the PDF is the only source of truth
             data['all_policies'] = all_policies
-            print(f" Extracted {len(all_policies)} policies for gap calculation")
+            print(f" Extracted {len(all_policies)} policies in PDF order (NO SORTING)")
             
-            # Get the FIRST policy (Policy #1)
+            # Get the FIRST policy from the PDF (not necessarily Policy #1)
             first_policy_data = all_policies[0]
             
-            # First insurance = start date of Policy #1 (oldest policy)
+            # First insurance = start date of first policy in the list
             data['first_insurance_date'] = first_policy_data['start_date']
             
-            # Renewal date = Policy #1 expiry date (will be overridden by expiry_date field if present)
+            # Renewal date = first policy's expiry date
             data['renewal_date'] = first_policy_data['end_date']
             
-            # Policy end date = Policy #1 expiry date
+            # Policy end date = first policy's expiry date
             data['policy_end_date'] = first_policy_data['end_date']
             
             # Get the LAST policy (current/latest one) for policy_start_date
             last_policy_data = all_policies[-1]
             data['policy_start_date'] = last_policy_data['start_date']
             
-            print(f" First Insurance Date (from Policy #1 start): {data['first_insurance_date']}")
-            print(f" Renewal Date (Policy #1 Expiry): {data['renewal_date']}")
-            print(f" Current Policy Start Date: {data['policy_start_date']}")
+            print(f" First Insurance Date (from first policy in list): {data['first_insurance_date']}")
+            print(f" Renewal Date (First policy Expiry): {data['renewal_date']}")
+            print(f" Current Policy Start Date (from last policy): {data['policy_start_date']}")
 
     
     # Fallback: Try to get from detail section if policies section not found

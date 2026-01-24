@@ -658,6 +658,42 @@
                         this.handleInput(e.target);
                         this.setDirty(true);
                     }
+                });
+                
+                // Update auto-fill button label to show selected driver
+                this.updateAutoFillButtonLabel();
+                
+                // Attach additional event listeners
+                this.attachEventListeners();
+            },
+
+            updateAutoFillButtonLabel: function() {
+                const btn = document.getElementById('btn-autofill-dash');
+                if (!btn) return;
+                
+                const driversStr = localStorage.getItem('autoDashboardDrivers');
+                const currDrvIdxStr = localStorage.getItem('autoDashboardCurrDrvIdx');
+                
+                if (driversStr) {
+                    try {
+                        const drivers = JSON.parse(driversStr);
+                        const currDrvIdx = parseInt(currDrvIdxStr || '0');
+                        const selectedDriver = drivers[currDrvIdx];
+                        
+                        if (selectedDriver) {
+                            const driverNum = selectedDriver.id || (currDrvIdx + 1);
+                            btn.innerHTML = `<i class="fas fa-copy"></i> Fill from Driver ${driverNum}`;
+                            console.log(`✅ Auto-fill button shows: Driver ${driverNum}`);
+                        }
+                    } catch (e) {
+                        console.warn('⚠️ Failed to update auto-fill button:', e);
+                    }
+                }
+            },
+
+            attachEventListeners: function() {
+                // Apply masks
+                document.body.addEventListener('input', (e) => {
                     if (e.target.dataset.mask) this.applyMask(e.target);
                 });
 
@@ -1044,45 +1080,56 @@
             },
 
             autoFillFromDASH: function() {
-                console.log('🔄 Auto-filling from DASH data...');
+                console.log('🔄 Auto-filling from selected driver data...');
                 
-                // Get the stored DASH data from localStorage
-                const dashDataStr = localStorage.getItem('dashData');
-                if (!dashDataStr) {
-                    alert('❌ No DASH data found. Please parse a DASH PDF first in the Auto Dashboard.');
-                    console.warn('No dashData in localStorage');
+                // Get the drivers data from localStorage
+                const driversStr = localStorage.getItem('autoDashboardDrivers');
+                const currDrvIdxStr = localStorage.getItem('autoDashboardCurrDrvIdx');
+                
+                if (!driversStr) {
+                    alert('❌ No driver data found. Please parse a DASH PDF first in the Auto Dashboard.');
+                    console.warn('No autoDashboardDrivers in localStorage');
                     return;
                 }
 
                 try {
-                    const dashData = JSON.parse(dashDataStr);
-                    console.log('📊 DASH Data found:', dashData);
+                    const drivers = JSON.parse(driversStr);
+                    const currDrvIdx = parseInt(currDrvIdxStr || '0');
+                    const selectedDriver = drivers[currDrvIdx];
+                    
+                    if (!selectedDriver) {
+                        alert('❌ Selected driver not found.');
+                        console.warn('Selected driver not found at index:', currDrvIdx);
+                        return;
+                    }
 
-                    // Map DASH fields to Property fields
+                    console.log(`📊 Using Driver ${selectedDriver.id || (currDrvIdx + 1)} data:`, selectedDriver);
+
+                    // Map driver fields to Property fields
                     const fieldMapping = {
-                        'name': 'name',                    // Customer Name
-                        'address': 'address',              // Address
-                        'dob': 'dob',                      // Date of Birth
-                        'phone': 'phone'                   // Phone
+                        'personalName': 'name',            // Customer Name
+                        'personalAddress': 'address',      // Address
+                        'personalDob': 'dob',              // Date of Birth
+                        'personalMobile': 'phone'          // Phone
                     };
 
                     let filledCount = 0;
                     const filledFields = [];
 
-                    // Auto-fill matching fields directly from DASH data
-                    Object.entries(fieldMapping).forEach(([dashKey, propKey]) => {
-                        const dashValue = dashData[dashKey];
-                        if (dashValue && dashValue !== '-' && dashValue !== 'N/A') {
+                    // Auto-fill matching fields directly from selected driver data
+                    Object.entries(fieldMapping).forEach(([drvKey, propKey]) => {
+                        const drvValue = selectedDriver[drvKey];
+                        if (drvValue && drvValue !== '-' && drvValue !== 'N/A' && drvValue !== '') {
                             const propInput = document.querySelector(`[data-key="${propKey}"]`);
                             if (propInput) {
-                                propInput.value = dashValue;
+                                propInput.value = drvValue;
                                 
                                 // Trigger input event to ensure data binding
                                 propInput.dispatchEvent(new Event('input', { bubbles: true }));
                                 propInput.dispatchEvent(new Event('change', { bubbles: true }));
                                 
-                                console.log(`✅ Filled ${propKey}: "${dashValue}"`);
-                                filledFields.push(`${propKey}: ${dashValue}`);
+                                console.log(`✅ Filled ${propKey}: "${drvValue}"`);
+                                filledFields.push(`${propKey}: ${drvValue}`);
                                 filledCount++;
                                 
                                 // Visual feedback - highlight the field
@@ -1096,7 +1143,7 @@
 
                     if (filledCount > 0) {
                         this.setDirty(true);
-                        const message = `✅ Auto-filled ${filledCount} field(s) from DASH data:\n\n${filledFields.join('\n')}`;
+                        const message = `✅ Auto-filled ${filledCount} field(s) from Driver ${selectedDriver.id || (currDrvIdx + 1)} data:\n\n${filledFields.join('\n')}`;
                         console.log(message);
                         alert(message);
                     } else {
@@ -1107,7 +1154,8 @@
                     console.error('❌ Error parsing DASH data:', error);
                     alert('❌ Error parsing DASH data. Please try again.');
                 }
-            }
+            },
+
         };
 
         window.addEventListener('DOMContentLoaded', () => {

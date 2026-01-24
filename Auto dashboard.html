@@ -412,16 +412,11 @@
                         </div>
                     </section>
 
-                    <!-- CARD 7: GAP -->
+                    <!-- CARD 7: GAP CALCULATIONS (DYNAMIC - ONE FOR EACH ADJACENT POLICY PAIR) -->
                     <section id="section-gap" class="hud__section scroll-mt-24" data-scope="driver">
-                        <div class="flex items-center gap-2 mb-3"><span class="flex items-center justify-center w-6 h-6 rounded bg-indigo-100 text-indigo-600 text-xs font-bold">7</span><h3 class="text-sm font-bold text-slate-700 uppercase tracking-wide">Gap Calculation</h3></div>
-                        <div class="bg-white rounded-xl shadow-soft border border-slate-200 overflow-hidden relative p-6 space-y-5 hover:shadow-md transition-shadow hud__card">
-                            <div class="absolute top-0 left-0 w-1 h-full bg-indigo-500"></div>
-                            <div class="grid grid-cols-3 gap-4 items-end hud__field-grid">
-                                <div><label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Start of Term</label><input type="text" data-key="gapStart" data-mask="date" class="hud__input w-full text-sm font-mono font-bold text-indigo-700 bg-indigo-50 px-3 py-2 rounded-lg border border-indigo-100 text-center shadow-sm" placeholder="MM/DD/YYYY"></div>
-                                <div><label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Prev Expire</label><input type="text" data-key="gapEnd" data-mask="date" class="hud__input w-full text-sm font-mono font-bold text-slate-700 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200 text-center shadow-sm" placeholder="MM/DD/YYYY"></div>
-                                <div><label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Insurance Gap</label><input type="text" id="gap-days-output" readonly class="hud__input w-full text-sm font-mono font-bold text-slate-700 bg-slate-100 px-3 py-2 rounded-lg border border-slate-200 text-center shadow-inner" placeholder="0 Days"></div>
-                            </div>
+                        <div class="flex items-center gap-2 mb-3"><span class="flex items-center justify-center w-6 h-6 rounded bg-indigo-100 text-indigo-600 text-xs font-bold">7</span><h3 class="text-sm font-bold text-slate-700 uppercase tracking-wide">Gap Calculations</h3></div>
+                        <div id="gap-sections-container">
+                            <!-- Gap sections will be dynamically rendered here -->
                         </div>
                     </section>
 
@@ -797,9 +792,8 @@
                         this.updateLicenceGaps();
                     }
 
-                    if(['gapStart', 'gapEnd'].includes(target.dataset.key)) {
-                        this.calcInsuranceGap();
-                    }
+                    // Note: Gap sections are now dynamically rendered and read-only
+                    // Old single gap calculation no longer needed
                 } 
                 else {
                     const vScope = target.closest('.hud__section[data-scope^="vehicle-"]');
@@ -897,6 +891,57 @@
                 this.refreshUI(); 
             },
 
+            formatDateForDisplay: function(date) {
+                const month = String(date.getMonth() + 1).padStart(2, '0');
+                const day = String(date.getDate()).padStart(2, '0');
+                const year = date.getFullYear();
+                return `${month}/${day}/${year}`;
+            },
+
+            parseDate: function(dateStr) {
+                /**
+                 * Parse MM/DD/YYYY format string into Date object
+                 */
+                if (!dateStr || typeof dateStr !== 'string') return new Date();
+                const parts = dateStr.split('/');
+                if (parts.length !== 3) return new Date();
+                return new Date(parseInt(parts[2]), parseInt(parts[0]) - 1, parseInt(parts[1]));
+            },
+
+            getRandomizedDisplayDate: function(baseDate, offsetType) {
+                /**
+                 * Generate display-only randomized date for G, G2, G1
+                 * Keeps the calculated year, randomizes day/month within specified windows
+                 */
+                const drv = this.drivers[this.currDrvIdx];
+                const firstInsString = drv.expFirstIns_base || drv.expFirstIns;
+                const firstInsDate = this.parseDate(firstInsString);
+                
+                const firstInsDay = firstInsDate.getTime();
+                
+                let targetOffsetDays;
+                
+                if (offsetType === 'G') {
+                    // G: 12-13 months before First Insurance = 365-398 days
+                    targetOffsetDays = 365 + Math.floor(Math.random() * 34);
+                } else if (offsetType === 'G2') {
+                    // G2: 23-24 months before First Insurance = 700-730 days
+                    targetOffsetDays = 700 + Math.floor(Math.random() * 31);
+                } else if (offsetType === 'G1') {
+                    // G1: 22 months before First Insurance = ~670 days, randomize within valid day range
+                    targetOffsetDays = 670 + Math.floor(Math.random() * 15) - 7;
+                }
+                
+                // Generate random display date
+                const displayDate = new Date(firstInsDay - (targetOffsetDays * 24 * 60 * 60 * 1000));
+                
+                // Keep the year from calculated date, but use randomized month/day
+                const calculatedYear = baseDate.getFullYear();
+                displayDate.setFullYear(calculatedYear);
+                
+                return this.formatDateForDisplay(displayDate);
+            },
+
             refreshUI: function() {
                 const drv = this.drivers[this.currDrvIdx];
 
@@ -922,23 +967,49 @@
                 this.updateFileUI('dash', drv.files?.dash);
                 this.updateFileUI('mvr', drv.files?.mvr);
 
-                // --- Ensure gap calculation fields are set from driver data ---
-                const gapStartField = document.querySelector('[data-key="gapStart"]');
-                const gapEndField = document.querySelector('[data-key="gapEnd"]');
-                if (gapStartField) gapStartField.value = drv.gapStart || '';
-                if (gapEndField) gapEndField.value = drv.gapEnd || '';
+                // --- Apply display-only formatting for license experience dates ---
+                // First Insurance Date: Display exactly as calculated (NO randomization)
+                const firstInsField = document.querySelector('[data-key="expFirstIns"]');
+                if (firstInsField && drv.expFirstIns_base) {
+                    firstInsField.value = drv.expFirstIns_base;
+                    console.log('✅ First Insurance (display): ', drv.expFirstIns_base);
+                }
+
+                // G, G2, G1 dates: Display with randomized month/day (within windows, year fixed)
+                const gField = document.querySelector('[data-key="expGDate"]');
+                if (gField && drv.expGDate_base) {
+                    const gBaseDate = this.parseDate(drv.expGDate_base);
+                    const gDisplay = this.getRandomizedDisplayDate(gBaseDate, 'G');
+                    gField.value = gDisplay;
+                    console.log('✅ G Date (display): ', gDisplay, '(calculated base: ' + drv.expGDate_base + ')');
+                }
+
+                const g2Field = document.querySelector('[data-key="expG2Date"]');
+                if (g2Field && drv.expG2Date_base) {
+                    const g2BaseDate = this.parseDate(drv.expG2Date_base);
+                    const g2Display = this.getRandomizedDisplayDate(g2BaseDate, 'G2');
+                    g2Field.value = g2Display;
+                    console.log('✅ G2 Date (display): ', g2Display, '(calculated base: ' + drv.expG2Date_base + ')');
+                }
+
+                const g1Field = document.querySelector('[data-key="expG1Date"]');
+                if (g1Field && drv.expG1Date_base) {
+                    const g1BaseDate = this.parseDate(drv.expG1Date_base);
+                    const g1Display = this.getRandomizedDisplayDate(g1BaseDate, 'G1');
+                    g1Field.value = g1Display;
+                    console.log('✅ G1 Date (display): ', g1Display, '(calculated base: ' + drv.expG1Date_base + ')');
+                }
+
+                // --- Render gap sections for all adjacent policy pairs ---
+                this.renderGapSections();
 
                 // Always render claims section after restore
                 this.renderClaimSections(drv.claims || []);
 
                 this.updateLicenceGaps();
-                // Calculate insurance gap AFTER setting input fields, with extra delay to ensure DOM is updated
+                // Old single gap calculation is deprecated - using renderGapSections instead
                 setTimeout(() => {
-                    // Re-read values from DOM to ensure calculation uses latest
-                    const gapStartVal = gapStartField ? gapStartField.value : '';
-                    const gapEndVal = gapEndField ? gapEndField.value : '';
-                    console.log('[GAP RESTORE] (DELAYED) About to recalculate insurance gap with:', { gapStart: gapStartVal, gapEnd: gapEndVal });
-                    this.calcInsuranceGap();
+                    console.log('[DEPRECATED] Old calcInsuranceGap logic removed - using renderGapSections instead');
                 }, 50);
                 this.saveToLocalStorage();
             },
@@ -1292,37 +1363,33 @@
                             // G2 = First Insurance - 3 years
                             // G1 = First Insurance - 5 years
                             if (data.first_insurance_date) {
-                                drv.expFirstIns = data.first_insurance_date;  // First Insurance Date = Last policy start
+                                drv.expFirstIns = data.first_insurance_date;  // First Insurance Date = Last policy start (UNCHANGED)
                                 console.log('✅ Set First Insurance (from last policy):', data.first_insurance_date);
                                 
-                                // Calculate G, G2, G1 dates with RANDOM month and day (keep year fixed)
+                                // Store base calculated dates (not randomized)
                                 const firstInsDate = new Date(data.first_insurance_date);
                                 
-                                // Helper to format with random month/day but fixed year
-                                const formatWithRandomDay = (date) => {
-                                    const year = date.getFullYear();
-                                    const randomMonth = Math.floor(Math.random() * 12) + 1;
-                                    const randomDay = Math.floor(Math.random() * 28) + 1;
-                                    return `${String(randomMonth).padStart(2, '0')}/${String(randomDay).padStart(2, '0')}/${year}`;
-                                };
-                                
-                                // G = First Insurance - 1 year
+                                // G = First Insurance - 1 year (base calculation)
                                 const gDate = new Date(firstInsDate);
                                 gDate.setFullYear(gDate.getFullYear() - 1);
-                                drv.expGDate = formatWithRandomDay(gDate);
-                                console.log('✅ Calculated G (First Ins - 1 year):', drv.expGDate);
+                                drv.expGDate_base = this.formatDateForDisplay(gDate);
                                 
-                                // G2 = First Insurance - 3 years
+                                // G2 = First Insurance - 3 years (base calculation)
                                 const g2Date = new Date(firstInsDate);
                                 g2Date.setFullYear(g2Date.getFullYear() - 3);
-                                drv.expG2Date = formatWithRandomDay(g2Date);
-                                console.log('✅ Calculated G2 (First Ins - 3 years):', drv.expG2Date);
+                                drv.expG2Date_base = this.formatDateForDisplay(g2Date);
                                 
-                                // G1 = First Insurance - 5 years
+                                // G1 = First Insurance - 5 years (base calculation)
                                 const g1Date = new Date(firstInsDate);
                                 g1Date.setFullYear(g1Date.getFullYear() - 5);
-                                drv.expG1Date = formatWithRandomDay(g1Date);
-                                console.log('✅ Calculated G1 (First Ins - 5 years):', drv.expG1Date);
+                                drv.expG1Date_base = this.formatDateForDisplay(g1Date);
+                                
+                                // Store First Insurance date in base format for display
+                                drv.expFirstIns_base = this.formatDateForDisplay(firstInsDate);
+                                
+                                console.log('✅ Calculated G (base):', drv.expGDate_base);
+                                console.log('✅ Calculated G2 (base):', drv.expG2Date_base);
+                                console.log('✅ Calculated G1 (base):', drv.expG1Date_base);
                             }
                             
                             // Section 7: Gap Calculation fields
@@ -1887,6 +1954,94 @@
                 }
                 
                 console.log(`✅ Gap result: ${outField.value}`);
+            },
+
+            renderGapSections: function() {
+                const drv = this.drivers[this.currDrvIdx];
+                const container = document.getElementById('gap-sections-container');
+                if (!container) return;
+
+                // Clear existing sections
+                container.innerHTML = '';
+
+                // Check if we have policies data with at least 2 policies
+                if (!drv.allPolicies || drv.allPolicies.length < 2) {
+                    container.innerHTML = '<div class="bg-white rounded-xl shadow-soft border border-slate-200 p-6 text-center text-slate-500"><p class="text-sm">No policies available or fewer than 2 policies to calculate gaps</p></div>';
+                    console.log('⚠️ Cannot render gap sections - fewer than 2 policies');
+                    return;
+                }
+
+                // STRICT USER REQUIREMENT: Use policies in the order provided by data source
+                // For N policies, create (N-1) gap sections
+                // Each section compares Policy[i] with Policy[i-1]
+                
+                const policyCount = drv.allPolicies.length;
+                console.log(`📊 RENDERING ${policyCount - 1} GAP SECTIONS for ${policyCount} policies`);
+
+                // Create gap sections from last policy down to first (comparing adjacent pairs)
+                // i starts from the last policy and goes backwards
+                for (let i = policyCount - 1; i > 0; i--) {
+                    const currentPolicy = drv.allPolicies[i];
+                    const previousPolicy = drv.allPolicies[i - 1];
+                    const currentPolicyNum = currentPolicy.number || (i + 1);
+                    const previousPolicyNum = previousPolicy.number || i;
+
+                    console.log(`  GAP SECTION #${policyCount - i}: Policy #${currentPolicyNum} vs Policy #${previousPolicyNum}`);
+                    console.log(`    Current (Policy #${currentPolicyNum}):`, currentPolicy);
+                    console.log(`    Previous (Policy #${previousPolicyNum}):`, previousPolicy);
+
+                    // Calculate gap
+                    let gapText = '-';
+                    let gapClass = 'text-slate-700';
+                    
+                    if (currentPolicy.end_date && previousPolicy.start_date) {
+                        const currentEnd = new Date(currentPolicy.end_date);
+                        const previousStart = new Date(previousPolicy.start_date);
+
+                        if (!isNaN(currentEnd.getTime()) && !isNaN(previousStart.getTime())) {
+                            const diffTime = currentEnd - previousStart;
+                            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+                            if (diffDays === 0) {
+                                gapText = '0 Days';
+                                gapClass = 'text-slate-700';
+                            } else if (diffDays > 0) {
+                                gapText = `Gap (${diffDays} Days)`;
+                                gapClass = 'text-rose-600';
+                            } else {
+                                gapText = `Overlap (${Math.abs(diffDays)} Days)`;
+                                gapClass = 'text-amber-600';
+                            }
+                            console.log(`    Calculation: ${currentPolicy.end_date} - ${previousPolicy.start_date} = ${diffDays} days`);
+                        }
+                    }
+
+                    // Create HTML for this gap section
+                    const sectionHTML = `
+                        <div class="bg-white rounded-xl shadow-soft border border-slate-200 overflow-hidden relative p-6 hover:shadow-md transition-shadow hud__card">
+                            <div class="absolute top-0 left-0 w-1 h-full bg-indigo-500"></div>
+                            <div class="mb-2 text-[10px] font-bold text-slate-400 uppercase">Policy ${currentPolicyNum} ← Policy ${previousPolicyNum}</div>
+                            <div class="grid grid-cols-3 gap-4 items-end hud__field-grid">
+                                <div>
+                                    <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">End of Term</label>
+                                    <input type="text" readonly class="hud__input w-full text-sm font-mono font-bold text-indigo-700 bg-indigo-50 px-3 py-2 rounded-lg border border-indigo-100 text-center shadow-sm" value="${currentPolicy.end_date || '-'}">
+                                </div>
+                                <div>
+                                    <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Start of Term</label>
+                                    <input type="text" readonly class="hud__input w-full text-sm font-mono font-bold text-slate-700 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200 text-center shadow-sm" value="${previousPolicy.start_date || '-'}">
+                                </div>
+                                <div>
+                                    <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Insurance Gap</label>
+                                    <input type="text" readonly class="hud__input w-full text-sm font-mono font-bold px-3 py-2 rounded-lg border border-slate-200 text-center shadow-inner bg-slate-100 ${gapClass}" value="${gapText}">
+                                </div>
+                            </div>
+                        </div>
+                    `;
+
+                    container.innerHTML += sectionHTML;
+                }
+
+                console.log(`✅ Rendered ${policyCount - 1} gap sections`);
             },
 
             saveToDatabase: async function() {
