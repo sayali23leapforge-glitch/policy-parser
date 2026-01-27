@@ -84,28 +84,8 @@ def extract_dash_fields(text):
         data['report_date'] = normalize_date(date_str)
         print(f" Found Report Date: {data['report_date']}")
     
-    # Driver Name - Extract only the name part, stopping at keywords
-    # DASH format: "DRIVER REPORT\nNAME Report Date:" or similar
-    name_patterns = [
-        # Match right after "DRIVER REPORT" - capture name before "Report Date"
-        r'DRIVER\s+REPORT\s*\n\s*([A-Z][A-Za-z,\s]+?)\s+Report\s+Date',
-        # Match "NAME: WORD WORD" format
-        r'(?:FULL\s+)?NAME\s*[:\s]*([A-Z][A-Za-z\s]+?)(?=\s+(?:Report|Date|Address|Phone|Email|DOB|DLN|License|Expiry|Expir|Issue|Valid|Birth|Number|Renewal|Issued)|\s*$)',
-        # Match generic "WORD WORD" after "DRIVER REPORT" (for names with comma like "Last, First")
-        r'DRIVER\s+REPORT\s*\n\s*([A-Z][a-z]+,\s*[A-Z][a-z]+)',  
-    ]
-    for pattern in name_patterns:
-        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-        if match:
-            name_extracted = match.group(1).strip()
-            # Clean up: remove extra spaces, newlines
-            name_extracted = re.sub(r'\s+', ' ', name_extracted).strip()
-            # Remove any remaining keywords at the end
-            name_extracted = re.sub(r'\s+(REPORT|DATE|ADDRESS|PHONE|EMAIL|DOB|DLN|LICENSE|EXPIRY|EXPIR|ISSUE|VALID|BIRTH|NUMBER|RENEWAL|ISSUED|REQUESTOR)\s*$', '', name_extracted, flags=re.IGNORECASE).strip()
-            if name_extracted and len(name_extracted) > 2 and 'REPORT' not in name_extracted.upper():  # Ensure we have a valid name
-                data['name'] = name_extracted
-                print(f" Found name: {data['name']}")
-                break
+    # Driver Name - REMOVED: Name should only come from MVR
+    # Name will be extracted from MVR PDF, not from DASH
     
     # Address - format: "Address: 201-1480 Eglinton Ave W ,Toronto,ON M6C2G5"
     address_patterns = [
@@ -131,17 +111,8 @@ def extract_dash_fields(text):
             data['license_number'] = match.group(1).strip()
             break
     
-    # Date of Birth - format: "Date of Birth: 1980-02-03"
-    dob_patterns = [
-        r'Date\s+of\s+Birth:\s*(\d{4}-\d{2}-\d{2})',  # 1980-02-03
-        r'(?:Date\s*of\s*)?Birth(?:\s*Date)?[:\s]+(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',
-        r'DOB[:\s]+(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',
-    ]
-    for pattern in dob_patterns:
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            data['dob'] = normalize_date(match.group(1))
-            break
+    # Date of Birth - REMOVED: DOB should only come from MVR
+    # Date of Birth will be extracted from MVR PDF, not from DASH
     
     # Expiry Date
     expiry_patterns = [
@@ -187,10 +158,45 @@ def extract_dash_fields(text):
             data['license_class'] = match.group(1).strip()
             break
     
-    # VIN and Vehicle info: Extract ONLY from Policy #1 section
+    # VIN and Vehicle info: Extract ALL VEHICLES from Policy #1 section ONLY
     # Find Policy #1, then extract up to Policy #2 (or end if no Policy #2)
     
     policy1_pos = text.find('Policy #1')
+    policy1_vehicles_list = []  # Array to store ALL vehicles from Policy #1
+    
+    print(f"\n[VEHICLES] Searching for 'Policy #1'...")
+    print(f"[VEHICLES] policy1_pos = {policy1_pos}")
+    print(f"[VEHICLES] Total text length: {len(text)} chars")
+    
+    # Also search for vehicle section
+    vehicle_search = text.find('Vehicle #')
+    print(f"[VEHICLES] Searching for 'Vehicle #'... found at position: {vehicle_search}")
+    
+    if vehicle_search >= 0:
+        print(f"[VEHICLES] Vehicle section found! Text around it (500 chars):")
+        start = max(0, vehicle_search - 100)
+        end = min(len(text), vehicle_search + 400)
+        print(f"{text[start:end]}")
+    else:
+        print(f"[VEHICLES] ❌ NO 'Vehicle #' found in entire PDF text!")
+        print(f"[VEHICLES] Searching for alternative vehicle patterns...")
+        
+        # Check for other possible patterns
+        if 'VIN' in text:
+            print(f"[VEHICLES] Found 'VIN' in text")
+            vin_pos = text.find('VIN')
+            print(f"[VEHICLES] Text around VIN (300 chars):")
+            start = max(0, vin_pos - 100)
+            end = min(len(text), vin_pos + 200)
+            print(f"{text[start:end]}")
+        
+        if 'VEHICLE' in text.upper():
+            print(f"[VEHICLES] Found 'VEHICLE' (uppercase) in text")
+            veh_pos = text.upper().find('VEHICLE')
+            print(f"[VEHICLES] Text around VEHICLE (300 chars):")
+            start = max(0, veh_pos - 100)
+            end = min(len(text), veh_pos + 200)
+            print(f"{text[start:end]}")
     
     if policy1_pos >= 0:
         # Find the NEXT policy number after Policy #1
@@ -203,59 +209,85 @@ def extract_dash_fields(text):
             # Policy #1 section ends where the next policy begins
             next_policy_pos = policy1_pos + len('Policy #1') + next_policy_match.start()
             policy1_section = text[policy1_pos:next_policy_pos]
+            print(f"[VEHICLES] Found next policy, Policy #1 section size: {len(policy1_section)} chars")
         else:
             # No next policy, take the rest of the document
             policy1_section = text[policy1_pos:]
+            print(f"[VEHICLES] No next policy found, taking rest of doc. Policy #1 section size: {len(policy1_section)} chars")
         
-        # Now find Vehicle #1 with VIN in this Policy #1 section
-        # Strategy: Find ALL "Vehicle #1:" occurrences and pick the one with a VIN
-        # Skip entries that are just "Principal Operator" or "Named Insured"
+        print(f"[VEHICLES] Policy #1 section (first 1000 chars):\n{policy1_section[:1000]}")
+        print(f"[VEHICLES] ...")
+        print(f"[VEHICLES] Policy #1 section (last 500 chars):\n{policy1_section[-500:]}")
         
-        # Split by "Vehicle #1:" to get all vehicle blocks
-        vehicle_blocks = re.split(r'Vehicle\s*#1:\s*', policy1_section, flags=re.IGNORECASE)
+        # Extract ALL vehicles from Policy #1 by finding all "Vehicle #N:" patterns
+        # Split by any Vehicle #N pattern to get all vehicle blocks
+        vehicle_blocks = re.split(r'Vehicle\s*#(\d+):\s*', policy1_section, flags=re.IGNORECASE)
         
-        vin = '-'
-        vehicle_year_make_model = '-'
-        found = False
+        print(f"[VEHICLES] Split result: {len(vehicle_blocks)} blocks")
+        if len(vehicle_blocks) > 1:
+            print(f"[VEHICLES] vehicle_blocks structure: {[type(b).__name__ + f'(len={len(b)})' for b in vehicle_blocks[:5]]}")
+        else:
+            print(f"[VEHICLES] ❌ No Vehicle #N pattern matched! Regex didn't split anything")
         
-        for block in vehicle_blocks[1:]:  # Skip the first element (before first Vehicle #1)
-            # Check if this block contains a VIN (17-char code)
-            vin_match = re.search(r'([A-HJ-NPR-Z0-9]{17})', block)
-            
-            if vin_match and not re.match(r'^(Principal Operator|Named Insured|Self|Spouse)', block.strip(), re.IGNORECASE):
-                # This block has a VIN and is not just a role label
-                vin = vin_match.group(1).strip().upper()
+        # vehicle_blocks will be: ['text_before', 'num1', 'content1', 'num2', 'content2', ...]
+        # Process pairs: (vehicle_number, vehicle_content)
+        
+        for i in range(1, len(vehicle_blocks), 2):
+            if i + 1 < len(vehicle_blocks):
+                vehicle_num = vehicle_blocks[i].strip()
+                block = vehicle_blocks[i + 1]
                 
-                # Extract year/make/model - everything up to the VIN
-                vehicle_line = block[:vin_match.start()].strip()
+                print(f"[VEHICLES] Processing Vehicle #{vehicle_num}...")
+                print(f"[VEHICLES]   Block content (first 200 chars): {block[:200]}")
                 
-                # Take only the first line or first part before Coverage details
-                lines = vehicle_line.split('\n')
-                vehicle_info = lines[0].strip() if lines else vehicle_line
+                # Check if this block contains a VIN (17-char code)
+                vin_match = re.search(r'([A-HJ-NPR-Z0-9]{17})', block)
                 
-                # Clean up the text
-                vehicle_info = re.sub(r'\s+', ' ', vehicle_info)  # collapse whitespace
-                vehicle_info = vehicle_info.rstrip(' -/').strip()   # remove trailing separators
-                
-                # Skip if it's empty or just a role
-                if vehicle_info and not re.match(r'^(Principal Operator|Named Insured|Self|Spouse|DLN|Ontario|Relationship)', vehicle_info, re.IGNORECASE):
-                    vehicle_year_make_model = vehicle_info
-                    found = True
-                    print(f" Found Vehicle #1 from Policy #1 with VIN: {vehicle_year_make_model}")
-                    print(f" Found VIN: {vin}")
-                    break
+                if vin_match and not re.match(r'^(Principal Operator|Named Insured|Self|Spouse)', block.strip(), re.IGNORECASE):
+                    # This block has a VIN and is not just a role label
+                    vin = vin_match.group(1).strip().upper()
+                    
+                    # Extract year/make/model - everything up to the VIN
+                    vehicle_line = block[:vin_match.start()].strip()
+                    
+                    # Take only the first line
+                    lines = vehicle_line.split('\n')
+                    vehicle_info = lines[0].strip() if lines else vehicle_line
+                    
+                    # Clean up the text
+                    vehicle_info = re.sub(r'\s+', ' ', vehicle_info)  # collapse whitespace
+                    vehicle_info = vehicle_info.rstrip(' -/').strip()   # remove trailing separators
+                    
+                    # Skip if it's empty or just a role
+                    if vehicle_info and not re.match(r'^(Principal Operator|Named Insured|Self|Spouse|DLN|Ontario|Relationship)', vehicle_info, re.IGNORECASE):
+                        policy1_vehicles_list.append({
+                            'vehicle_number': vehicle_num,
+                            'vin': vin,
+                            'year_make_model': vehicle_info
+                        })
+                        print(f"[VEHICLES] ✅ Found Vehicle #{vehicle_num}: {vehicle_info} | VIN: {vin}")
+                else:
+                    print(f"[VEHICLES] ❌ No valid VIN found in block or block is role label")
         
-        if not found:
-            print("- No Vehicle #1 with VIN found in Policy #1 section")
-            vin = '-'
-            vehicle_year_make_model = '-'
+        if not policy1_vehicles_list:
+            print("[VEHICLES] ❌ No vehicles with VIN found in Policy #1 section")
     else:
-        print("- Policy #1 not found in PDF")
-        vin = '-'
-        vehicle_year_make_model = '-'
+        print("[VEHICLES] ❌ Policy #1 not found in PDF")
     
-    data['vin'] = vin
-    data['vehicle_year_make_model'] = vehicle_year_make_model
+    print(f"[VEHICLES] FINAL RESULT: {len(policy1_vehicles_list)} vehicles extracted")
+    print(f"[VEHICLES] policy1_vehicles_list = {policy1_vehicles_list}")
+    
+    # Store all vehicles from Policy #1 for frontend to render
+    data['policy1_vehicles'] = policy1_vehicles_list
+    
+    # For backward compatibility, set single vehicle fields (use first vehicle if available)
+    if policy1_vehicles_list:
+        data['vin'] = policy1_vehicles_list[0]['vin']
+        data['vehicle_year_make_model'] = policy1_vehicles_list[0]['year_make_model']
+    else:
+        data['vin'] = '-'
+        data['vehicle_year_make_model'] = '-'
+    
     data['extracted_from_policy'] = '1'  # Indicates this is from Policy #1
     
     # Years of Continuous Insurance
@@ -709,6 +741,12 @@ def parse_mvr_pdf(pdf_file):
         # Parse the extracted text
         mvr_data = extract_mvr_fields(full_text)
         
+        # CRITICAL: Verify policy1_vehicles is in the response
+        print(f"\n[PARSE_MVR] Verifying response data:")
+        print(f"[PARSE_MVR] - 'policy1_vehicles' in mvr_data: {'policy1_vehicles' in mvr_data}")
+        if 'policy1_vehicles' in mvr_data:
+            print(f"[PARSE_MVR] - mvr_data['policy1_vehicles']: {mvr_data['policy1_vehicles']}")
+        
         return {
             "success": True,
             "data": mvr_data,
@@ -731,6 +769,48 @@ def extract_mvr_fields(text):
     print("=== MVR PDF TEXT SAMPLE (First 2000 chars) ===")
     print(text[:2000])
     print("=== END SAMPLE ===")
+    
+    # Extract text before DOB to search for name (names usually come before DOB)
+    dob_pos = text.find('Birth Date')
+    if dob_pos < 0:
+        dob_pos = text.find('DOB')
+    if dob_pos < 0:
+        dob_pos = text.find('Date of Birth')
+    
+    search_text = text[:dob_pos] if dob_pos > 0 else text[:2000]
+    print(f"=== NAME SEARCH AREA (before DOB, {len(search_text)} chars) ===")
+    print(search_text)
+    print("=== END NAME SEARCH AREA ===")
+    
+    # FIRST: Extract Full Name from MVR - Ontario format: "Name: LASTNAME,FIRSTNAME,MIDDLE Birth Date: ..."
+    # Method 1: Direct match for "Name: " followed by text until "Birth Date" or newline
+    name_match = re.search(r'Name\s*:\s*([^\n]+?)(?=\s+(?:Birth|Gender|Address|Height|Demerit)|\n)', text, re.IGNORECASE)
+    if name_match:
+        name_raw = name_match.group(1).strip()
+        # Name format is: LASTNAME,FIRSTNAME,MIDDLE
+        # Convert to: FIRSTNAME LASTNAME MIDDLE (or just use as-is if preferred)
+        if ',' in name_raw:
+            parts = [p.strip() for p in name_raw.split(',')]
+            # Reorder: parts[0]=LASTNAME, parts[1]=FIRSTNAME, parts[2]=MIDDLE (if exists)
+            if len(parts) >= 2:
+                name_formatted = f"{parts[1]} {parts[0]}"
+                if len(parts) > 2 and parts[2]:
+                    name_formatted += f" {parts[2]}"
+                data['name'] = name_formatted
+                print(f" ✓ Found Name (formatted from comma-separated): {data['name']}")
+            else:
+                data['name'] = name_raw
+                print(f" ✓ Found Name (raw): {data['name']}")
+        else:
+            data['name'] = name_raw
+            print(f" ✓ Found Name (raw): {data['name']}")
+    
+    if 'name' not in data:
+        print(f" ⚠️  WARNING: Could not extract name from MVR")
+    else:
+        print(f" ✓ FINAL NAME EXTRACTED: {data['name']}")
+    
+    # License Number - various patterns
     
     # License Number - various patterns
     license_patterns = [
@@ -822,6 +902,111 @@ def extract_mvr_fields(text):
             data['license_class'] = match.group(1).strip().replace('*', '')
             print(f" Found License Class: {data['license_class']}")
             break
+    
+    # VIN and Vehicle info: Extract ALL VEHICLES from Policy #1 section (for MVR PDFs)
+    # Find Policy #1, then extract up to Policy #2 (or end if no Policy #2)
+    policy1_pos = text.find('Policy #1')
+    policy1_vehicles_list = []  # Array to store ALL vehicles from Policy #1
+    
+    print(f"\n[VEHICLES] Searching for 'Policy #1' in MVR...")
+    print(f"[VEHICLES] policy1_pos = {policy1_pos}")
+    
+    if policy1_pos >= 0:
+        # Find the NEXT policy number after Policy #1
+        remaining_text = text[policy1_pos + len('Policy #1'):]
+        next_policy_match = re.search(r'Policy\s*#(\d+)', remaining_text)
+        
+        if next_policy_match:
+            # Policy #1 section ends where the next policy begins
+            next_policy_pos = policy1_pos + len('Policy #1') + next_policy_match.start()
+            policy1_section = text[policy1_pos:next_policy_pos]
+            print(f"[VEHICLES] Found next policy, Policy #1 section size: {len(policy1_section)} chars")
+        else:
+            # No next policy, take the rest of the document
+            policy1_section = text[policy1_pos:]
+            print(f"[VEHICLES] No next policy found, taking rest of doc. Policy #1 section size: {len(policy1_section)} chars")
+        
+        # Extract ALL vehicles from Policy #1
+        # Format: "Vehicle #N: YEAR MAKE - MODEL VIN"
+        # Find all occurrences of "Vehicle #N:" followed by content until next "Vehicle #" or end
+        vehicle_pattern = r'Vehicle\s*#(\d+):\s*([^\n]*(?:\n(?!Vehicle\s*#).*)*)'
+        vehicle_matches = re.finditer(vehicle_pattern, policy1_section, re.IGNORECASE)
+        
+        print(f"[VEHICLES] Searching for vehicles with pattern...")
+        
+        for match in vehicle_matches:
+            vehicle_num = match.group(1).strip()
+            vehicle_content = match.group(2)
+            
+            print(f"\n[VEHICLES] Processing Vehicle #{vehicle_num}...")
+            print(f"[VEHICLES] Content (first 300 chars): {vehicle_content[:300]}")
+            
+            # Check if this is a role label (e.g., "Principal Operator", "Named Insured")
+            first_line = vehicle_content.split('\n')[0].strip()
+            if re.match(r'^(Principal Operator|Named Insured|Self|Spouse|Relationship|Owner)', first_line, re.IGNORECASE):
+                print(f"[VEHICLES] Skipping - this is a role assignment, not a vehicle")
+                continue
+            
+            # Try to extract VIN and year/make/model
+            vin = None
+            year_make_model = None
+            
+            # Pattern 1: "YEAR MAKE - MODEL VIN" (VIN is 17 chars, on same line)
+            match1 = re.search(r'(\d{4}\s+[A-Z]+(?:\s*-\s*[^\-\n]+)?)\s*-\s*([A-HJ-NPR-Z0-9]{17})', vehicle_content, re.IGNORECASE)
+            if match1:
+                year_make_model = match1.group(1).strip()
+                vin = match1.group(2).strip().upper()
+                print(f"[VEHICLES] Pattern 1: Found year/make/model: {year_make_model}, VIN: {vin}")
+            
+            # Pattern 2: "YEAR MAKE - MODEL\nVIN" (VIN on next line)
+            if not vin:
+                match2 = re.search(r'(\d{4}\s+[A-Z]+(?:\s*-\s*[^\-\n]+)?)\s*\n\s*([A-HJ-NPR-Z0-9]{17})', vehicle_content, re.IGNORECASE)
+                if match2:
+                    year_make_model = match2.group(1).strip()
+                    vin = match2.group(2).strip().upper()
+                    print(f"[VEHICLES] Pattern 2: Found year/make/model: {year_make_model}, VIN: {vin}")
+            
+            # Pattern 3: Extract first meaningful line and look for VIN anywhere
+            if not vin:
+                lines = [l.strip() for l in vehicle_content.split('\n') if l.strip()]
+                for line in lines[:3]:  # Check first 3 lines
+                    vin_match = re.search(r'([A-HJ-NPR-Z0-9]{17})', line)
+                    if vin_match:
+                        vin = vin_match.group(1).strip().upper()
+                        year_make_model = line[:vin_match.start()].strip()
+                        print(f"[VEHICLES] Pattern 3: Found year/make/model: {year_make_model}, VIN: {vin}")
+                        break
+            
+            if vin and year_make_model:
+                # Clean up the year/make/model
+                year_make_model = re.sub(r'\s+', ' ', year_make_model)
+                year_make_model = year_make_model.rstrip(' -/:').strip()
+                
+                # Skip if empty
+                if year_make_model and len(year_make_model) > 3:
+                    policy1_vehicles_list.append({
+                        'vehicle_number': vehicle_num,
+                        'vin': vin,
+                        'year_make_model': year_make_model
+                    })
+                    print(f"[VEHICLES] [OK] Added Vehicle #{vehicle_num}: {year_make_model} | VIN: {vin}")
+                else:
+                    print(f"[VEHICLES] Skipped - year/make/model too short: '{year_make_model}'")
+            else:
+                print(f"[VEHICLES] [WARN] Could not extract VIN or year/make/model for Vehicle #{vehicle_num}")
+    else:
+        print("[VEHICLES] [ERROR] Policy #1 not found in MVR PDF")
+    
+    print(f"\n[VEHICLES] FINAL RESULT: {len(policy1_vehicles_list)} vehicles extracted")
+    print(f"[VEHICLES] policy1_vehicles_list = {policy1_vehicles_list}")
+    
+    # Store all vehicles from Policy #1 for frontend to render
+    data['policy1_vehicles'] = policy1_vehicles_list
+    
+    # For backward compatibility, set single vehicle fields (use first vehicle if available)
+    if policy1_vehicles_list:
+        data['vin'] = policy1_vehicles_list[0]['vin']
+        data['vehicle_year_make_model'] = policy1_vehicles_list[0]['year_make_model']
     
     # Demerit Points - MVR format: "Demerit Points: 00"
     points_patterns = [
@@ -965,6 +1150,14 @@ def extract_mvr_fields(text):
     print(f"=== MVR EXTRACTED DATA ===")
     print(json.dumps(data, indent=2))
     print(f"=== END DATA ===")
+    
+    # CRITICAL: Verify policy1_vehicles is in the data being returned
+    print(f"\n[VERIFY] About to return extract_mvr_fields data:")
+    print(f"[VERIFY] - 'policy1_vehicles' key exists: {'policy1_vehicles' in data}")
+    if 'policy1_vehicles' in data:
+        print(f"[VERIFY] - policy1_vehicles value: {data['policy1_vehicles']}")
+        print(f"[VERIFY] - policy1_vehicles length: {len(data['policy1_vehicles'])}")
+    print(f"[VERIFY] - Total data keys: {len(data)}")
     
     return data
 

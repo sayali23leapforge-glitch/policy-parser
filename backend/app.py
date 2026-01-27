@@ -657,6 +657,12 @@ def parse_mvr():
         if not result['success']:
             return jsonify(result), 400
         
+        # CRITICAL: Verify policy1_vehicles is in the response before sending to client
+        print(f"\n[API] /parse-mvr endpoint response verification:")
+        print(f"[API] - 'policy1_vehicles' in result['data']: {'policy1_vehicles' in result['data']}")
+        if 'policy1_vehicles' in result['data']:
+            print(f"[API] - result['data']['policy1_vehicles']: {result['data']['policy1_vehicles']}")
+        
         # Return extracted data
         return jsonify({
             'success': True,

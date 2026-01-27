@@ -1034,14 +1034,35 @@
 
             renderVehicleCards: function(vehicles) {
                 const that = this;
-                document.getElementById('vehicles-container').innerHTML = vehicles.map((v, i) => `
-                    <div class="bg-white rounded-xl shadow-lg shadow-indigo-100 border border-indigo-200 overflow-hidden relative hud__section hud__card" data-scope="vehicle-${v.id}" data-vehicle-id="${v.id}" data-vehicle-index="${i}">
+                const container = document.getElementById('vehicles-container');
+                
+                // CLEAR container ONCE at the start
+                container.innerHTML = '';
+                
+                // Log for verification
+                console.log(`🚗 renderVehicleCards: Rendering ${vehicles.length} vehicle(s)`);
+                
+                // Loop through EACH vehicle and CREATE/APPEND a new section
+                vehicles.forEach((v, i) => {
+                    const vehicleSection = document.createElement('div');
+                    vehicleSection.className = 'bg-white rounded-xl shadow-lg shadow-indigo-100 border border-indigo-200 overflow-hidden relative hud__section hud__card';
+                    vehicleSection.setAttribute('data-scope', `vehicle-${v.id}`);
+                    vehicleSection.setAttribute('data-vehicle-id', `${v.id}`);
+                    vehicleSection.setAttribute('data-vehicle-index', `${i}`);
+                    
+                    vehicleSection.innerHTML = `
                         <div class="absolute top-0 left-0 w-1 h-full bg-indigo-500"></div>
                         <div class="absolute top-3 right-3 z-10 hud__card-actions">
                             ${vehicles.length > 1 ? `<button class="text-xs text-rose-400 hover:text-rose-600 hover:bg-rose-50 p-1.5 rounded transition-colors delete-vehicle-btn" data-vehicle-id="${v.id}"><i class="fa-solid fa-trash"></i></button>` : ''}
                         </div>
                         
                         <div class="p-6 space-y-5">
+                            <!-- Vehicle Number Label from Policy #1 -->
+                            <div class="mb-2">
+                                <span class="inline-block px-2 py-1 bg-indigo-100 text-indigo-600 text-xs font-bold rounded">#${v.policyVehicleNumber || (i + 1)}</span>
+                                <p class="text-[10px] text-slate-400 mt-1">From Policy #1</p>
+                            </div>
+                            
                             <div class="flex items-start gap-5 border-b border-dashed border-slate-100 pb-5 hud__field-header">
                                 <div class="w-10 h-10 rounded-full bg-indigo-50 flex items-center justify-center text-indigo-600 shrink-0 mt-1 hud__card-icon">
                                     <i class="fa-solid fa-car"></i>
@@ -1162,7 +1183,17 @@
                             </div>
                         </div>
                     </div>
-                `).join('');
+                    `;
+                    
+                    // APPEND new section to container (do NOT overwrite)
+                    container.appendChild(vehicleSection);
+                    
+                    console.log(`✅ Rendered vehicle #${i + 1} (ID: ${v.id})`);
+                });
+                
+                // Log final verification
+                console.log(`📊 Total vehicle sections rendered: ${vehicles.length}`);
+                console.log(`📊 UI container now has ${container.children.length} vehicle sections`);
                 
                 // Attach delete button event listeners
                 setTimeout(() => {
@@ -1176,6 +1207,7 @@
                         });
                     });
                 }, 0);
+
             },
 
             handleFileUpload: async function(input, type) {
@@ -1218,6 +1250,11 @@
                         const drv = this.drivers[this.currDrvIdx];
                         const data = result.data;
                         
+                        console.log('=== FULL RESPONSE DATA ===');
+                        console.log('result.data =', data);
+                        console.log('result.data.policy1_vehicles =', data.policy1_vehicles);
+                        console.log('=== END FULL RESPONSE ===');
+                        
                         console.log('=== PDF RAW TEXT ===');
                         console.log(result.raw_text);
                         console.log('=== END RAW TEXT ===');
@@ -1250,16 +1287,9 @@
                             });
                             
                             // Section 1: Personal Information
-                            // Preserve existing values if not in PDF (from URL params)
-                            if (data.name) {
-                                drv.personalName = data.name;
-                                drv.mainName = data.name;
-                                // NOTE: Search field keeps the URL param name (lead name)
-                                // Main name field shows DASH PDF name
-                                console.log('✅ Set name from DASH PDF:', data.name);
-                            } // Don't clear name if PDF doesn't have it
+                            // Name and DOB are ONLY set from MVR, not from DASH
+                            // These fields must remain empty after DASH parse
                             if (data.address) drv.personalAddress = data.address;
-                            if (data.dob) drv.personalDob = data.dob;
                             if (data.phone) {
                                 drv.personalMobile = data.phone;
                             } // Don't clear phone if PDF doesn't have it - keep URL param value
@@ -1306,51 +1336,78 @@
                                 vehicle0_yearMake: drv.vehicles[0]?.yearMake
                             });
                             
-                            // VIN and Vehicle info - add to first vehicle if extracted
-                            if (drv.vehicles && drv.vehicles[0]) {
-                                // ALWAYS reset VIN/yearMake when a new PDF is parsed (clear old values)
-                                const prevVin = drv.vehicles[0].vin;
-                                const prevYearMake = drv.vehicles[0].yearMake;
+                            // VIN and Vehicle info - RENDER ALL VEHICLES FROM Policy #1
+                            const policy1Vehicles = data.policy1_vehicles || [];
+                            
+                            console.log('🔍 DEBUG: Full data object keys:', Object.keys(data));
+                            console.log('🔍 DEBUG: data.policy1_vehicles =', data.policy1_vehicles);
+                            console.log('🔍 DEBUG: policy1Vehicles array =', policy1Vehicles);
+                            console.log('🔍 DEBUG: policy1Vehicles.length =', policy1Vehicles.length);
+                            
+                            if (policy1Vehicles.length > 0) {
+                                console.log(`📋 Found ${policy1Vehicles.length} vehicle(s) from Policy #1:`, policy1Vehicles);
                                 
-                                // Clear old values first
-                                drv.vehicles[0].vin = data.vin || '-';
-                                drv.vehicles[0].yearMake = data.vehicle_year_make_model || '-';
+                                // Clear existing vehicles first (keep only the template)
+                                if (drv.vehicles && drv.vehicles.length > 0) {
+                                    // Keep removing extra vehicles until we have just 1
+                                    while (drv.vehicles.length > 1) {
+                                        drv.vehicles.pop();
+                                    }
+                                }
                                 
-                                console.log('🚗 UPDATED first vehicle VIN:');
-                                console.log('   OLD VIN:', prevVin);
-                                console.log('   NEW VIN:', drv.vehicles[0].vin);
-                                console.log('   OLD yearMake:', prevYearMake);
-                                console.log('   NEW yearMake:', drv.vehicles[0].yearMake);
-                                console.log('   From Policy #:', data.extracted_from_policy || '1');
+                                // Populate ALL vehicles from Policy #1 data
+                                policy1Vehicles.forEach((policyVehicle, index) => {
+                                    if (index === 0) {
+                                        // Update first vehicle (already exists)
+                                        if (drv.vehicles && drv.vehicles[0]) {
+                                            drv.vehicles[0].vin = policyVehicle.vin;
+                                            drv.vehicles[0].yearMake = policyVehicle.year_make_model;
+                                            drv.vehicles[0].policyVehicleNumber = policyVehicle.vehicle_number;
+                                            console.log(`✅ Vehicle #${policyVehicle.vehicle_number}: ${policyVehicle.year_make_model} | VIN: ${policyVehicle.vin}`);
+                                        }
+                                    } else {
+                                        // Add new vehicle section for additional vehicles
+                                        const newVehicle = {
+                                            id: Math.max(...drv.vehicles.map(v => v.id || 0)) + 1,
+                                            vin: policyVehicle.vin,
+                                            yearMake: policyVehicle.year_make_model,
+                                            policyVehicleNumber: policyVehicle.vehicle_number
+                                        };
+                                        drv.vehicles.push(newVehicle);
+                                        console.log(`✅ Vehicle #${policyVehicle.vehicle_number}: ${policyVehicle.year_make_model} | VIN: ${policyVehicle.vin}`);
+                                    }
+                                });
                                 
-                                // DEBUG: Log all vehicles after update
-                                console.log('📋 All vehicles after DASH parsing:', drv.vehicles.map((v, i) => ({
+                                console.log('📊 All vehicles populated from Policy #1:', drv.vehicles.map((v, i) => ({
                                     index: i,
                                     id: v.id,
+                                    vehicleNumber: v.policyVehicleNumber,
                                     vin: v.vin,
                                     yearMake: v.yearMake
                                 })));
-                                console.log('✅ Vehicle data extracted from Policy #' + (data.extracted_from_policy || '1'));
                             } else if (data.vin || data.vehicle_year_make_model) {
-                                console.warn('⚠️ Vehicle data extracted but no vehicle found');
+                                // Fallback for backward compatibility (single vehicle)
+                                if (drv.vehicles && drv.vehicles[0]) {
+                                    drv.vehicles[0].vin = data.vin || '-';
+                                    drv.vehicles[0].yearMake = data.vehicle_year_make_model || '-';
+                                    console.log('✅ Using single vehicle (backward compatibility)');
+                                }
                             }
                             
                             // Section 5: Driver Information
-                            // Only set drvName from DASH if not already manually entered
-                            if (data.name && !drv.drvName) {
-                                drv.drvName = data.name;
-                                // Also sync to sidebar mainName if not already set
-                                if (!drv.mainName) {
-                                    drv.mainName = data.name;
-                                }
-                            } else if (data.name && drv.drvName) {
-                                console.log('✓ Preserving manually entered driver name:', drv.drvName);
+                            // Name and DOB are ONLY set from MVR, not from DASH
+                            // These fields must come from MVR extraction
+                            
+                            // Cont. Ins. Date = Start of Last policy (most recent policy start date)
+                            if (data.policy_start_date) {
+                                drv.drvContIns = data.policy_start_date;
+                                console.log('✅ Set Cont. Ins. Date (Start of Last Policy):', data.policy_start_date);
+                            } else if (data.first_insurance_date) {
+                                // Fallback to first insurance date if last policy date not available
+                                drv.drvContIns = data.first_insurance_date;
+                                console.log('✅ Set Cont. Ins. Date (fallback to first insurance):', data.first_insurance_date);
                             }
-                            if (data.dob) drv.drvDob = data.dob;  // Date of Birth in Driver Info
-                            if (data.years_continuous_insurance) {
-                                drv.drvContIns = data.years_continuous_insurance;
-                                console.log('✅ Set Continuous Insurance Years:', data.years_continuous_insurance);
-                            }
+                            
                             if (data.policy_start_date) {
                                 drv.drvInsSince = data.first_insurance_date || data.policy_start_date;  // Insured Since = First insurance date (oldest policy)
                                 console.log('✅ Set Insured Since:', drv.drvInsSince);
@@ -1358,28 +1415,29 @@
                             if (data.relationship) drv.mainRel = data.relationship;
                             
                             // Section 6: License Experience Calculation
-                            // First Insurance = Start date of the LAST/oldest policy (e.g., Policy #6)
-                            // G = First Insurance - 1 year
-                            // G2 = First Insurance - 3 years
-                            // G1 = First Insurance - 5 years
-                            if (data.first_insurance_date) {
-                                drv.expFirstIns = data.first_insurance_date;  // First Insurance Date = Last policy start (UNCHANGED)
-                                console.log('✅ Set First Insurance (from last policy):', data.first_insurance_date);
+                            // First Insurance = Same as Cont. Ins. Date (LAST policy start date)
+                            // G = First Insurance - 1 year (year exact, month/day random)
+                            // G2 = First Insurance - 3 years (year exact, month/day random)
+                            // G1 = First Insurance - 5 years (year exact, month/day random)
+                            if (data.policy_start_date) {
+                                // Use LAST policy start date (same as Cont. Ins. Date)
+                                drv.expFirstIns = data.policy_start_date;
+                                console.log('✅ Set First Insurance (same as Cont. Ins. Date):', data.policy_start_date);
                                 
-                                // Store base calculated dates (not randomized)
-                                const firstInsDate = new Date(data.first_insurance_date);
+                                // Store base calculated dates
+                                const firstInsDate = this.parseDate(data.policy_start_date);
                                 
-                                // G = First Insurance - 1 year (base calculation)
+                                // G = First Insurance - 1 year (exact year, random month/day)
                                 const gDate = new Date(firstInsDate);
                                 gDate.setFullYear(gDate.getFullYear() - 1);
                                 drv.expGDate_base = this.formatDateForDisplay(gDate);
                                 
-                                // G2 = First Insurance - 3 years (base calculation)
+                                // G2 = First Insurance - 3 years (exact year, random month/day)
                                 const g2Date = new Date(firstInsDate);
                                 g2Date.setFullYear(g2Date.getFullYear() - 3);
                                 drv.expG2Date_base = this.formatDateForDisplay(g2Date);
                                 
-                                // G1 = First Insurance - 5 years (base calculation)
+                                // G1 = First Insurance - 5 years (exact year, random month/day)
                                 const g1Date = new Date(firstInsDate);
                                 g1Date.setFullYear(g1Date.getFullYear() - 5);
                                 drv.expG1Date_base = this.formatDateForDisplay(g1Date);
@@ -1387,9 +1445,9 @@
                                 // Store First Insurance date in base format for display
                                 drv.expFirstIns_base = this.formatDateForDisplay(firstInsDate);
                                 
-                                console.log('✅ Calculated G (base):', drv.expGDate_base);
-                                console.log('✅ Calculated G2 (base):', drv.expG2Date_base);
-                                console.log('✅ Calculated G1 (base):', drv.expG1Date_base);
+                                console.log('✅ Calculated G (base, -1 year):', drv.expGDate_base);
+                                console.log('✅ Calculated G2 (base, -3 years):', drv.expG2Date_base);
+                                console.log('✅ Calculated G1 (base, -5 years):', drv.expG1Date_base);
                             }
                             
                             // Section 7: Gap Calculation fields
@@ -1479,17 +1537,40 @@
                             return; // Exit early to prevent duplicate refreshUI call
                             
                         } else if (type === 'mvr') {
-                            // MVR PDF: MVR Info section only
+                            // MVR PDF: ALWAYS update Personal Information section with MVR data
+                            // MVR data should ALWAYS overwrite previous DASH data for these fields
+                            
+                            console.log('=== MVR DATA PROCESSING ===');
+                            console.log('MVR data.name:', data.name);
+                            console.log('MVR data.dob:', data.dob);
+                            console.log('Before MVR - Current drv.personalName:', drv.personalName);
+                            console.log('Before MVR - Current drv.personalDob:', drv.personalDob);
+                            
+                            // CLEAR old Personal Information fields first (important for Binder update)
+                            drv.personalName = '';
+                            drv.drvName = '';
+                            drv.personalDob = '';
+                            drv.drvDob = '';
+                            
+                            // Section 1: Personal Information - ALWAYS populate from MVR (overwrite DASH data)
                             if (data.name) {
-                                drv.personalName = data.name;
-                                drv.drvName = data.name;
+                                drv.personalName = data.name;  // Set to Personal Information Full Name - OVERWRITE
+                                drv.drvName = data.name;       // Also set to Driver Info Full Name - OVERWRITE
+                                console.log('✅ SET Full Name from MVR to Personal Information:', data.name);
+                            } else {
+                                console.log('⚠️  No name found in MVR data');
                             }
+                            
                             if (data.dob) {
-                                drv.personalDob = data.dob;
-                                drv.mvrDob = data.dob;
-                                drv.drvDob = data.dob;  // Also set Driver Info DOB field
-                                console.log('✅ Set Birth Date from MVR to all sections:', data.dob);
+                                drv.personalDob = data.dob;    // Set to Personal Information DOB - OVERWRITE
+                                drv.drvDob = data.dob;         // Also set to Driver Info DOB - OVERWRITE
+                                drv.mvrDob = data.dob;         // Set to MVR section DOB
+                                console.log('✅ SET Date of Birth from MVR to Personal Information:', data.dob);
+                            } else {
+                                console.log('⚠️  No DOB found in MVR data');
                             }
+                            
+                            // Section 4: MVR Information - populate all available fields
                             if (data.license_number) {
                                 drv.licNumber = data.license_number;
                                 console.log('✅ Set License Number from MVR:', data.license_number);
@@ -1621,7 +1702,7 @@
                     console.log(`  → Claim #${index+1}:`, claim);
                     
                     const claimHTML = `
-                        <div class="bg-white rounded-xl shadow-soft border border-indigo-200 overflow-hidden relative p-6 hover:shadow-md transition-shadow hud__card mb-4" data-claim-index="${index}">
+                        <div class="bg-white rounded-xl shadow-soft border-2 border-indigo-600 overflow-hidden relative p-6 hover:shadow-md transition-shadow hud__card mb-4" data-claim-index="${index}">
                             <div class="absolute top-0 left-0 w-1 h-full bg-indigo-500"></div>
                             <div class="absolute top-3 right-3 text-xs font-bold text-indigo-600">#${index + 1}</div>
                             
@@ -1746,7 +1827,7 @@
                     
                     // Add event listeners to update claims array on input change
                     container.querySelectorAll('.claim-input').forEach(input => {
-                        input.addEventListener('change', (e) => {
+                        const updateClaim = (e) => {
                             const idx = parseInt(e.target.dataset.claimIndex);
                             const field = e.target.dataset.claimField;
                             if(drv.claims && drv.claims[idx]) {
@@ -1756,8 +1837,39 @@
                                 const expense = parseFloat(drv.claims[idx].expense || 0);
                                 drv.claims[idx].total = (loss + expense).toFixed(2);
                                 console.log(`[CLAIM] Updated claim #${idx} field '${field}':`, e.target.value);
+                                
+                                // Update border color if At-Fault field changed
+                                if (field === 'fault') {
+                                    const claimCard = container.querySelector(`[data-claim-index="${idx}"]`);
+                                    console.log(`[FAULT] Claim #${idx} fault value: "${e.target.value.toLowerCase()}"`);
+                                    if (claimCard) {
+                                        if (e.target.value.toLowerCase() === 'yes') {
+                                            console.log(`[FAULT] Setting border RED for claim #${idx}`);
+                                            claimCard.classList.remove('border-indigo-600');
+                                            claimCard.classList.add('border-red-600');
+                                        } else {
+                                            console.log(`[FAULT] Setting border INDIGO for claim #${idx}`);
+                                            claimCard.classList.remove('border-red-600');
+                                            claimCard.classList.add('border-indigo-600');
+                                        }
+                                    }
+                                }
                             }
-                        });
+                        };
+                        input.addEventListener('change', updateClaim);
+                        input.addEventListener('input', updateClaim);
+                    });
+                    
+                    // Initial check: set red border if fault = yes
+                    claims.forEach((claim, index) => {
+                        if (claim.fault && claim.fault.toLowerCase() === 'yes') {
+                            const claimCard = container.querySelector(`[data-claim-index="${index}"]`);
+                            console.log(`[INIT] Setting RED border for claim #${index} - fault: ${claim.fault}`);
+                            if (claimCard) {
+                                claimCard.classList.remove('border-indigo-600');
+                                claimCard.classList.add('border-red-600');
+                            }
+                        }
                     });
                 }, 0);
             },
@@ -1924,11 +2036,11 @@
                     return;
                 }
                 
-                // Calculate gap: (LAST end_date) - (PREVIOUS start_date)
-                const diffTime = lastPolicyEnd - prevPolicyStart;
+                // Calculate gap: (PREVIOUS start_date) - (LAST end_date)
+                const diffTime = prevPolicyStart - lastPolicyEnd;
                 const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
                 
-                console.log(`  Gap calculation: ${lastPolicy.end_date} - ${prevPolicy.start_date} = ${diffDays} days`);
+                console.log(`  Gap calculation: ${prevPolicy.start_date} - ${lastPolicy.end_date} = ${diffDays} days`);
                 
                 // Update driver data
                 drv.gapStart = lastPolicy.end_date;
@@ -1999,7 +2111,7 @@
                         const previousStart = new Date(previousPolicy.start_date);
 
                         if (!isNaN(currentEnd.getTime()) && !isNaN(previousStart.getTime())) {
-                            const diffTime = currentEnd - previousStart;
+                            const diffTime = previousStart - currentEnd;
                             const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 
                             if (diffDays === 0) {
@@ -2012,7 +2124,7 @@
                                 gapText = `Overlap (${Math.abs(diffDays)} Days)`;
                                 gapClass = 'text-amber-600';
                             }
-                            console.log(`    Calculation: ${currentPolicy.end_date} - ${previousPolicy.start_date} = ${diffDays} days`);
+                            console.log(`    Calculation: ${previousPolicy.start_date} - ${currentPolicy.end_date} = ${diffDays} days`);
                         }
                     }
 
@@ -2317,8 +2429,10 @@
                     const drv = this.drivers[0];
                     drv.personalEmail = email || '';
                     drv.personalMobile = phone || '';
-                    drv.personalName = name || '';
-                    drv.mainName = name || '';
+                    // Name and DOB are ONLY set from MVR, not from URL params or DASH
+                    drv.personalName = '';  // Keep empty for MVR
+                    drv.personalDob = '';   // Keep empty for MVR
+                    drv.mainName = '';
                     // Clear all other fields in the driver object
                     Object.keys(drv).forEach(key => {
                         if (!['id','mainRel','personalEmail','personalMobile','personalName','mainName','vehicles','files','claims','convictions'].includes(key)) {
