@@ -585,30 +585,122 @@
                         const result = await response.json();
                         if (result.success && result.data) {
                             console.log('✅ Loaded saved property data:', result.data);
-                            // Restore customer and properties
-                            if (result.data.customer) this.customer = { ...result.data.customer };
-                            if (result.data.properties) this.properties = JSON.parse(JSON.stringify(result.data.properties));
+                            
+                            // NEW: Check if customer column contains the combined dual-mode data (JSONB workaround)
+                            let savedData = result.data;
+                            if (result.data.customer && typeof result.data.customer === 'object' && 
+                                (result.data.customer.viewMode || result.data.customer.homeowners || result.data.customer.tenants)) {
+                                console.log('📦 Found combined data in customer column (JSONB workaround format)');
+                                savedData = result.data.customer;
+                            }
+                            
+                            console.log('📋 Saved viewMode:', savedData.viewMode);
+                            
+                            // NEW: Load BOTH Homeowners and Tenants data if available
+                            if (savedData.homeowners) {
+                                console.log('🏠 Loading Homeowners data from saved data...');
+                                if (savedData.homeowners.customer) {
+                                    this.customer = { ...savedData.homeowners.customer };
+                                }
+                                if (savedData.homeowners.properties) {
+                                    this.properties = JSON.parse(JSON.stringify(savedData.homeowners.properties));
+                                }
+                                console.log('✅ Loaded Homeowners customer:', this.customer);
+                                console.log('✅ Loaded Homeowners properties:', this.properties);
+                            } else if (result.data.customer && typeof result.data.customer !== 'object' && result.data.properties) {
+                                // Fallback to old format for backwards compatibility
+                                console.log('📄 Loading from old format (backwards compatibility)...');
+                                this.customer = { ...result.data.customer };
+                                this.properties = JSON.parse(JSON.stringify(result.data.properties));
+                            }
+                            
+                            // NEW: Load Tenants data if available
+                            if (savedData.tenants) {
+                                console.log('🏢 Loading Tenants data from saved data...');
+                                if (savedData.tenants.customer) {
+                                    // Merge with default to ensure all fields exist
+                                    const defaultTenantCustomer = { ...DataFactory.createDefaultCustomer(), quoteType: 'Tenant Quote' };
+                                    this.blankTenant.customer = { ...defaultTenantCustomer, ...savedData.tenants.customer };
+                                }
+                                if (savedData.tenants.properties && savedData.tenants.properties.length > 0) {
+                                    // Merge with default to ensure all fields exist
+                                    const defaultTenantProperty = DataFactory.createDefaultProperty('Tenants');
+                                    this.blankTenant.property = { ...defaultTenantProperty, ...savedData.tenants.properties[0] };
+                                }
+                                console.log('✅ Loaded Tenants customer:', this.blankTenant.customer);
+                                console.log('✅ Loaded Tenants property:', this.blankTenant.property);
+                            } else {
+                                console.log('⚠️ No Tenants data found in saved data, using defaults');
+                                this.blankTenant.customer = { ...DataFactory.createDefaultCustomer(), quoteType: 'Tenant Quote' };
+                                this.blankTenant.property = DataFactory.createDefaultProperty('Tenants');
+                            }
+                            
+                            // Restore viewMode if it was saved
+                            if (savedData.viewMode) {
+                                this.viewMode = savedData.viewMode;
+                                console.log('✅ Set viewMode to:', this.viewMode);
+                            } else {
+                                // Default to Homeowners if no viewMode saved
+                                this.viewMode = 'Homeowners';
+                                console.log('⚠️ No viewMode found, defaulting to Homeowners');
+                            }
+                            
                             this.currPropIdx = 0;
                             this.renderSelectors();
-                            this.refreshUI();
-                            this.setDirty(false);
+                            
+                            // Important: Switch mode and refresh UI to display loaded data
+                            if (this.viewMode === 'Tenants') {
+                                console.log('🔄 Switching to Tenants mode and refreshing UI...');
+                                this.switchPolicyType('Tenants');
+                                // Also set the radio button
+                                const tenantRadio = document.querySelector('input[name="policyType"][value="Tenants"]');
+                                if (tenantRadio) {
+                                    tenantRadio.checked = true;
+                                    console.log('✅ Set Tenants radio button');
+                                }
+                                // CRITICAL: Refresh UI to populate form fields with loaded Tenants data
+                                console.log('🔄 Refreshing UI to display loaded Tenants data in form...');
+                                this.refreshUI();
+                            } else {
+                                console.log('🔄 Loading in Homeowners mode and refreshing UI');
+                                this.refreshUI();
+                            }
+                            
+                            // Restore consent field for the current mode
+                            const currentCustomer = this.viewMode === 'Tenants' ? this.blankTenant.customer : this.customer;
+                            if (currentCustomer && currentCustomer.consent) {
+                                console.log(`🔍 Restoring consent value: ${currentCustomer.consent}`);
+                                const consentRadio = document.querySelector(`input[name="consentRadios"][value="${currentCustomer.consent}"]`);
+                                if (consentRadio) {
+                                    consentRadio.checked = true;
+                                    console.log(`✅ Set consent radio to: ${currentCustomer.consent}`);
+                                } else {
+                                    console.warn(`⚠️ Could not find consent radio with value: ${currentCustomer.consent}`);
+                                }
+                            } else {
+                                console.log(`⚠️ No consent value found for ${this.viewMode} mode`);
+                            }
                         } else {
                             console.log('ℹ️ No saved property data found for this lead, resetting to blank');
                             this.customer = DataFactory.createDefaultCustomer();
                             this.properties = [DataFactory.createDefaultProperty()];
+                            this.blankTenant.customer = { ...DataFactory.createDefaultCustomer(), quoteType: 'Tenant Quote' };
+                            this.blankTenant.property = DataFactory.createDefaultProperty('Tenants');
+                            this.viewMode = 'Homeowners'; // Reset to default
                             this.currPropIdx = 0;
                             this.renderSelectors();
                             this.refreshUI();
-                            this.setDirty(false);
                         }
                     } catch (error) {
                         console.warn('⚠️ Could not load saved property data:', error);
                         this.customer = DataFactory.createDefaultCustomer();
                         this.properties = [DataFactory.createDefaultProperty()];
+                        this.blankTenant.customer = { ...DataFactory.createDefaultCustomer(), quoteType: 'Tenant Quote' };
+                        this.blankTenant.property = DataFactory.createDefaultProperty('Tenants');
+                        this.viewMode = 'Homeowners'; // Reset to default
                         this.currPropIdx = 0;
                         this.renderSelectors();
                         this.refreshUI();
-                        this.setDirty(false);
                     }
                 }
                 // Hide dropdown
@@ -656,7 +748,6 @@
                 document.body.addEventListener('input', (e) => {
                     if (e.target.matches('[data-key]')) {
                         this.handleInput(e.target);
-                        this.setDirty(true);
                     }
                 });
                 
@@ -845,7 +936,7 @@
                 } else if (scope === 'property' && targetProperty) {
                     Binder.syncFromDom('property', targetProperty, target);
                     Binder.loadToDom('property', targetProperty, target);
-                    this.updateHeader();
+                    if (this.updateHeader) this.updateHeader();
                 }
             },
 
@@ -872,7 +963,6 @@
                     } catch (e) {}
                 }
                 document.getElementById('client-search').value = searchName;
-                this.setDirty(false);
             },
 
             renderSelectors: function() {
@@ -884,6 +974,16 @@
                         pSel.add(new Option(label, i, i===this.currPropIdx, i===this.currPropIdx));
                     });
                 }
+            },
+            refreshUI: function() {
+                // Load customer data to DOM
+                Binder.loadToDom('customer', this.customer);
+                // Load current property data to DOM
+                const currProp = this.properties[this.currPropIdx];
+                if (currProp) {
+                    Binder.loadToDom('property', currProp);
+                }
+                if (this.updateHeader) this.updateHeader();
             },
             switchProperty: function(idx) { this.currPropIdx = parseInt(idx); this.refreshUI(); },
             switchPolicyType: function(val) {
@@ -908,9 +1008,14 @@
                     else { stdBtn.classList.add('hidden'); }
                 }
                 if (isTenant) {
+                    console.log('📝 Loading Tenants form data...');
+                    console.log('  blankTenant.customer:', this.blankTenant.customer);
+                    console.log('  blankTenant.property:', this.blankTenant.property);
                     Binder.loadToDom('customer', this.blankTenant.customer, null);
                     Binder.renderToDom('customer', this.blankTenant.customer);
                     Binder.loadToDom('property', this.blankTenant.property, null);
+                    Binder.renderToDom('property', this.blankTenant.property);
+                    console.log('✅ Tenants form data loaded to DOM');
                     const badge = document.getElementById('hud-prop-type-badge');
                     if(badge) badge.innerText = "Tenant - Rental - Apartment";
                     const radios = document.getElementsByName('consentRadios');
@@ -922,12 +1027,10 @@
             toggleStandardUpdates: function(el) {
                 // Implement your logic here for toggling standard updates.
                 // This is a placeholder to avoid syntax/type errors.
-                this.setDirty(true);
             },
             setConsent: function(val) {
                 if(this.viewMode === 'Tenants') this.blankTenant.customer.consent = val;
-                else this.customer.consent = val; 
-                this.setDirty(true);
+                else this.customer.consent = val;
             },
             deleteProperty: () => {
                 if(App.properties.length <= 1) return;
@@ -935,7 +1038,6 @@
                 App.currPropIdx = 0;
                 App.renderSelectors();
                 App.refreshUI();
-                App.setDirty(true);
             }, 
             addNewProperty: () => {
                 const newProp = { ...DataFactory.createDefaultProperty(), id: App.properties.length + 1 };
@@ -943,9 +1045,9 @@
                 App.currPropIdx = App.properties.length - 1;
                 App.renderSelectors();
                 App.refreshUI();
-                App.setDirty(true);
             },
             saveToDatabase: async function() {
+                console.log('🔥 saveToDatabase CALLED! Current view mode:', this.viewMode);
                 const btn = document.getElementById('btn-save');
                 const originalText = btn.innerHTML;
                 
@@ -954,33 +1056,122 @@
                     btn.disabled = true;
                     btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
                     
-                    // Get email from stored lead info if available
+                    // CRITICAL: Sync ALL form values for BOTH modes (Homeowners AND Tenants)
+                    console.log('🔄 Syncing ALL form values from DOM for both modes...');
+                    
+                    // Helper function to sync consent radio buttons
+                    const syncConsent = () => {
+                        const consentRadio = document.querySelector('input[name="consentRadios"]:checked');
+                        return consentRadio ? consentRadio.value : '';
+                    };
+                    
+                    // Sync the CURRENT active mode's data from DOM
+                    if (this.viewMode === 'Homeowners') {
+                        console.log('🏠 Currently in Homeowners mode - syncing Homeowners data from DOM...');
+                        
+                        // Sync customer fields for Homeowners
+                        document.querySelectorAll('.hud-scope[data-scope="customer"] [data-key]').forEach(el => {
+                            const key = el.dataset.key;
+                            if (el.type === 'checkbox') {
+                                this.customer[key] = el.checked ? 'Yes' : 'No';
+                            } else if (el.type === 'radio') {
+                                if (el.checked) this.customer[key] = el.value;
+                            } else {
+                                this.customer[key] = el.value;
+                            }
+                        });
+                        this.customer.consent = syncConsent();
+                        
+                        // Sync current property fields for Homeowners
+                        const currentProp = this.properties[this.currPropIdx];
+                        if (currentProp) {
+                            document.querySelectorAll('.hud-scope[data-scope="property"] [data-key]').forEach(el => {
+                                const key = el.dataset.key;
+                                if (el.type === 'checkbox') {
+                                    currentProp[key] = el.checked ? 'Yes' : 'No';
+                                } else if (el.type === 'radio') {
+                                    if (el.checked) currentProp[key] = el.value;
+                                } else {
+                                    currentProp[key] = el.value;
+                                }
+                            });
+                        }
+                        console.log('✅ Synced Homeowners customer:', this.customer);
+                        console.log('✅ Synced Homeowners properties:', this.properties);
+                        
+                    } else {
+                        console.log('🏢 Currently in Tenants mode - syncing Tenants data from DOM...');
+                        
+                        // Sync customer fields for Tenants
+                        document.querySelectorAll('.hud-scope[data-scope="customer"] [data-key]').forEach(el => {
+                            const key = el.dataset.key;
+                            if (el.type === 'checkbox') {
+                                this.blankTenant.customer[key] = el.checked ? 'Yes' : 'No';
+                            } else if (el.type === 'radio') {
+                                if (el.checked) this.blankTenant.customer[key] = el.value;
+                            } else {
+                                this.blankTenant.customer[key] = el.value;
+                            }
+                        });
+                        this.blankTenant.customer.consent = syncConsent();
+                        
+                        // Sync property fields for Tenants
+                        document.querySelectorAll('.hud-scope[data-scope="property"] [data-key]').forEach(el => {
+                            const key = el.dataset.key;
+                            if (el.type === 'checkbox') {
+                                this.blankTenant.property[key] = el.checked ? 'Yes' : 'No';
+                            } else if (el.type === 'radio') {
+                                if (el.checked) this.blankTenant.property[key] = el.value;
+                            } else {
+                                this.blankTenant.property[key] = el.value;
+                            }
+                        });
+                        console.log('✅ Synced Tenants customer:', this.blankTenant.customer);
+                        console.log('✅ Synced Tenants property:', this.blankTenant.property);
+                    }
+                    
+                    // Now create the payload with both modes' data
+                    const isTenantsMode = this.viewMode === 'Tenants';
+                    const sourceCustomer = isTenantsMode ? this.blankTenant.customer : this.customer;
+                    const sourceProperties = isTenantsMode ? [this.blankTenant.property] : this.properties;
+                    
+                    console.log('💾 Save called in mode:', this.viewMode);
+                    console.log('  isTenantsMode:', isTenantsMode);
+                    console.log('  sourceCustomer:', sourceCustomer);
+                    console.log('  sourceProperties length:', sourceProperties.length);
+                    
+                    // Get email from stored lead info if available, or from customer data
                     let email = '';
                     if (this.originalLead && this.originalLead.email) {
                         email = this.originalLead.email;
+                    } else if (sourceCustomer && sourceCustomer.email) {
+                        email = sourceCustomer.email;
                     }
                     
-                    console.log('💾 Property save - email from lead:', email);
+                    // Also get name and phone from original lead if customer name not set
+                    const name = sourceCustomer.name || (this.originalLead?.name || '');
+                    const phone = sourceCustomer.phone || (this.originalLead?.phone || '');
                     
-                    // Prepare complete property data structure
-                    const propertyData = {
-                        id: this.customer.name || Date.now().toString(), // Use customer name or timestamp as ID
-                        created_at: new Date().toISOString(),
-                        updated_at: new Date().toISOString(),
-                        // Customer Information
+                    console.log('💾 Property save - email:', email, 'name:', name, 'phone:', phone, 'mode:', this.viewMode);
+                    
+                    if (!email) {
+                        throw new Error('Email is required. Please search for a client first.');
+                    }
+                    
+                    // Helper function to format property data
+                    const formatPropertyData = (customer, properties) => ({
                         customer: {
-                            name: this.customer.name,
-                            address: this.customer.address,
-                            city: this.customer.city,
-                            postal: this.customer.postal,
-                            phone: this.customer.phone,
-                            dob: this.customer.dob,
-                            consent: this.customer.consent,
-                            quoteType: this.customer.quoteType,
+                            name: customer.name || name,
+                            address: customer.address,
+                            city: customer.city,
+                            postal: customer.postal,
+                            phone: customer.phone || phone,
+                            dob: customer.dob,
+                            consent: customer.consent,
+                            quoteType: customer.quoteType,
                             email: email
                         },
-                        // All Properties Array
-                        properties: this.properties.map(prop => ({
+                        properties: properties.map(prop => ({
                             id: prop.id,
                             policyType: prop.policyType,
                             structure: prop.structure,
@@ -1018,7 +1209,8 @@
                             bsmtFin: prop.bsmtFin,
                             bsmtFinBool: prop.bsmtFinBool,
                             sepEntrance: prop.sepEntrance,
-                            bsmtRented: prop.bsmtRented,                            // Systems
+                            bsmtRented: prop.bsmtRented,
+                            // Systems
                             heatYear: prop.heatYear,
                             elecYear: prop.elecYear,
                             plumbYear: prop.plumbYear,
@@ -1035,9 +1227,45 @@
                             // Additional
                             additionalNotes: prop.additionalNotes
                         }))
+                    });
+                    
+                    // Prepare BOTH Homeowners and Tenants data for saving
+                    const homeownersData = formatPropertyData(this.customer, this.properties);
+                    const tenantsData = formatPropertyData(this.blankTenant.customer, [this.blankTenant.property]);
+                    
+                    // Prepare payload for backend (with BOTH modes)
+                    const payload = {
+                        email: email,
+                        viewMode: this.viewMode, // Current view mode
+                        homeowners: homeownersData,
+                        tenants: tenantsData,
+                        // Also include the old structure for backwards compatibility
+                        customer: sourceCustomer.name ? formatPropertyData(sourceCustomer, sourceProperties).customer : homeownersData.customer,
+                        properties: sourceProperties.length > 0 ? formatPropertyData(sourceCustomer, sourceProperties).properties : homeownersData.properties
                     };
                     
-                    console.log("💾 Saving complete property data:", propertyData);
+                    console.log("💾 Saving BOTH Homeowners and Tenants data:", payload);
+                    console.log("📊 Homeowners data:", homeownersData);
+                    console.log("📊 Tenants data:", tenantsData);
+                    
+                    console.log("📤 DETAILED PAYLOAD STRUCTURE:");
+                    console.log("   email:", payload.email);
+                    console.log("   viewMode:", payload.viewMode);
+                    console.log("   homeowners.customer:", payload.homeowners?.customer ? 'YES ✅' : 'NO ❌');
+                    console.log("   homeowners.properties:", payload.homeowners?.properties ? `YES (${payload.homeowners.properties.length} items) ✅` : 'NO ❌');
+                    console.log("   tenants.customer:", payload.tenants?.customer ? 'YES ✅' : 'NO ❌');
+                    console.log("   tenants.properties:", payload.tenants?.properties ? `YES (${payload.tenants.properties.length} items) ✅` : 'NO ❌');
+                    
+                    // Check if tenants data is actually populated
+                    if (!payload.tenants?.customer || Object.keys(payload.tenants.customer).length === 0) {
+                        console.warn("⚠️ WARNING: Tenants customer is empty!");
+                    }
+                    if (!payload.tenants?.properties || payload.tenants.properties.length === 0) {
+                        console.warn("⚠️ WARNING: Tenants properties is empty!");
+                    }
+                    
+                    console.log("📤 Sending to backend...");
+                    console.log("Payload JSON size:", JSON.stringify(payload).length, "bytes");
                     
                     // Send to backend
                     const response = await fetch(`${window.location.origin}/api/save-property`, {
@@ -1045,19 +1273,18 @@
                         headers: {
                             'Content-Type': 'application/json',
                         },
-                        body: JSON.stringify(propertyData)
+                        body: JSON.stringify(payload)
                     });
                     
                     const result = await response.json();
                     
                     if (result.success) {
                         console.log("✅ Property data saved successfully:", result);
-                        this.setDirty(false);
                         btn.className = "text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 px-4 py-2.5 rounded-lg shadow-sm transition-all flex items-center gap-2 whitespace-nowrap focus:ring-2 focus:ring-emerald-500 focus:outline-none";
                         btn.innerHTML = '<i class="fa-solid fa-check"></i> Saved Successfully';
                         setTimeout(() => {
                             btn.disabled = false;
-                            if(!this.isDirty) btn.innerHTML = '<i class="fa-solid fa-database"></i> Save';
+                            btn.innerHTML = '<i class="fa-solid fa-database"></i> Save';
                         }, 2000);
                     } else {
                         throw new Error(result.error || 'Failed to save');
@@ -1074,9 +1301,70 @@
                     }, 2000);
                 }
             },
-            handleSearch: (q) => {
+            handleSearch: async (q) => {
                 const res = document.getElementById('search-results');
-                if(q) res.classList.remove('hidden'); else res.classList.add('hidden');
+                const term = (q || '').trim().toLowerCase();
+                if (!term) {
+                    res.classList.add('hidden');
+                    res.innerHTML = '';
+                    return;
+                }
+
+                res.classList.remove('hidden');
+                res.innerHTML = '<div class="px-4 py-3 text-xs text-slate-500">Searching...</div>';
+
+                try {
+                    const response = await fetch(`${window.location.origin}/api/leads`);
+                    const result = await response.json();
+
+                    if (!result.data || !Array.isArray(result.data)) {
+                        res.innerHTML = '<div class="px-4 py-3 text-xs text-rose-500">Error loading leads</div>';
+                        return;
+                    }
+
+                    const matches = result.data.filter(lead => {
+                        const name = (lead.name || '').toLowerCase();
+                        const email = (lead.email || '').toLowerCase();
+                        const phone = (lead.phone || '').toLowerCase();
+                        return name.includes(term) || email.includes(term) || phone.includes(term);
+                    });
+
+                    if (matches.length === 0) {
+                        res.innerHTML = '<div class="px-4 py-3 text-xs text-slate-500 text-center">No matching leads found</div>';
+                        return;
+                    }
+
+                    res.innerHTML = matches.map((lead) => `
+                        <div class="search-result-item px-4 py-2.5 hover:bg-indigo-50 cursor-pointer border-b border-slate-100 last:border-0 transition-colors"
+                             data-name="${(lead.name || '').replace(/\"/g, '&quot;')}"
+                             data-phone="${(lead.phone || '').replace(/\"/g, '&quot;')}"
+                             data-email="${(lead.email || '').replace(/\"/g, '&quot;')}">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <div class="text-sm font-bold text-slate-800">${lead.name || 'No Name'}</div>
+                                    <div class="text-xs text-slate-500">${lead.email || 'No email'}</div>
+                                </div>
+                                <div class="text-xs font-mono text-slate-600">${lead.phone || ''}</div>
+                            </div>
+                        </div>
+                    `).join('');
+
+                    // Attach click handlers
+                    setTimeout(() => {
+                        document.querySelectorAll('.search-result-item').forEach(item => {
+                            item.addEventListener('click', () => {
+                                const name = item.getAttribute('data-name');
+                                const phone = item.getAttribute('data-phone');
+                                const email = item.getAttribute('data-email');
+                                App.selectLead(name, phone, email);
+                                res.classList.add('hidden');
+                            });
+                        });
+                    }, 0);
+                } catch (error) {
+                    console.error('❌ Error searching leads:', error);
+                    res.innerHTML = '<div class="px-4 py-3 text-xs text-rose-500">Error loading leads</div>';
+                }
             },
 
             autoFillFromDASH: function() {
@@ -1142,7 +1430,6 @@
                     });
 
                     if (filledCount > 0) {
-                        this.setDirty(true);
                         const message = `✅ Auto-filled ${filledCount} field(s) from Driver ${selectedDriver.id || (currDrvIdx + 1)} data:\n\n${filledFields.join('\n')}`;
                         console.log(message);
                         alert(message);

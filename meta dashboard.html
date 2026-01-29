@@ -1213,7 +1213,7 @@
                 if (!row) return;
 
                 if (target.closest('.action-process')) {
-                    // Get lead data and navigate to Auto dashboard with parameters
+                    // Get lead data and navigate to appropriate page based on insurance type
                     const leadId = row.dataset.id;
                     const lead = this.state.leads.find(l => l.id === leadId);
                     if (lead) {
@@ -1222,7 +1222,20 @@
                             phone: lead.phone || '',
                             email: lead.email || ''
                         });
-                        window.location.href = `Auto dashboard.html?${params.toString()}`;
+                        
+                        // Determine which page to navigate to based on insurance type
+                        let destinationPage = 'Auto dashboard.html'; // Default to Auto
+                        
+                        if (lead.insuranceType) {
+                            // Check if it's a property-related type
+                            if (lead.insuranceType.toLowerCase().includes('home') || 
+                                lead.insuranceType.toLowerCase().includes('property') ||
+                                lead.insuranceType.toLowerCase().includes('dwelling')) {
+                                destinationPage = 'property.html';
+                            }
+                        }
+                        
+                        window.location.href = `${destinationPage}?${params.toString()}`;
                     } else {
                         window.location.href = 'Auto dashboard.html';
                     }

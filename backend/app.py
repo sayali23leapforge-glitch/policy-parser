@@ -948,6 +948,54 @@ def get_property_data(query):
         }), 500
 
 
+@app.route('/api/get-auto-data/<query>', methods=['GET'])
+def get_auto_data(query):
+    """Retrieve saved auto dashboard data by email"""
+    try:
+        print(f"🚗 Retrieving auto data for: {query}")
+
+        # Try to find by lead_id first (if valid UUID format)
+        try:
+            if len(query) == 36 and query.count('-') == 4:  # UUID format check
+                result = supabase.table('auto_data').select('*').eq('lead_id', query).limit(1).execute()
+                if result.data and len(result.data) > 0:
+                    print(f"✅ Found auto data by lead_id: {query}")
+                    return jsonify({
+                        'success': True,
+                        'data': result.data[0]
+                    }), 200
+        except Exception as e:
+            print(f"⚠️ Error searching auto data by lead_id: {str(e)}")
+        
+        # Try to find by email
+        try:
+            result = supabase.table('auto_data').select('*').eq('email', query).limit(1).execute()
+            if result.data and len(result.data) > 0:
+                print(f"✅ Found auto data by email: {query}")
+                return jsonify({
+                    'success': True,
+                    'data': result.data[0]
+                }), 200
+        except Exception as e:
+            print(f"⚠️ Error searching auto data by email: {str(e)}")
+        
+        print(f"⚠️ No auto data found for: {query}")
+        return jsonify({
+            'success': False,
+            'error': 'No data found',
+            'data': None
+        }), 404
+        
+    except Exception as e:
+        print(f"❌ Error retrieving auto data: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Failed to retrieve auto data: {str(e)}'
+        }), 500
+
+
 @app.route('/api/save-property', methods=['POST'])
 def save_property():
     """Save complete property data to Supabase linked to a lead"""
@@ -982,11 +1030,19 @@ def save_property():
             except Exception as e:
                 print(f"⚠️ Error finding lead by email: {str(e)}")
         
-        # Prepare data for storage
+        # Prepare data for storage - WORKAROUND for PostgREST schema cache issue
+        # Save all dual-mode data in the 'customer' JSONB column to avoid schema cache conflicts
+        combined_data = {
+            'viewMode': data.get('viewMode', 'Homeowners'),
+            'homeowners': data.get('homeowners', {}),
+            'tenants': data.get('tenants', {}),
+        }
+        
+        # Use properties column for backwards compatibility, customer column for dual-mode data
         save_data = {
             'email': email,
-            'properties': data.get('properties', []),
-            'customer': data.get('customer', {}),
+            'properties': data.get('properties', []),  # For backwards compatibility
+            'customer': combined_data,  # Store all dual-mode data here (JSONB works fine)
             'updated_at': datetime.utcnow().isoformat()
         }
         
@@ -994,8 +1050,27 @@ def save_property():
         if lead_id:
             save_data['lead_id'] = lead_id
         
-        print(f"💾 INSERT/UPDATE STEP - lead_id: {lead_id}, email: {email}")
+        print(f"\n{'='*80}")
+        print(f"💾 INSERT/UPDATE STEP - Saving property data for email: {email}")
+        print(f"{'='*80}")
         print(f"📦 Data to save keys: {list(save_data.keys())}")
+        print(f"\n📋 DETAILED PAYLOAD RECEIVED:")
+        print(f"   viewMode: {combined_data.get('viewMode')}")
+        print(f"   homeowners exists: {bool(data.get('homeowners'))}")
+        if data.get('homeowners'):
+            print(f"      - homeowners.customer keys: {list(data['homeowners'].get('customer', {}).keys())}")
+            print(f"      - homeowners.properties count: {len(data['homeowners'].get('properties', []))}")
+        print(f"   tenants exists: {bool(data.get('tenants'))}")
+        if data.get('tenants'):
+            print(f"      - tenants.customer keys: {list(data['tenants'].get('customer', {}).keys())}")
+            print(f"      - tenants.properties count: {len(data['tenants'].get('properties', []))}")
+        
+        print(f"\n🏠 Saving Homeowners data: {bool(data.get('homeowners'))}")
+        if data.get('homeowners'):
+            print(f"   Homeowners customer: {json.dumps(data['homeowners'].get('customer', {}), indent=2)[:200]}...")
+        print(f"🏢 Saving Tenants data: {bool(data.get('tenants'))}")
+        if data.get('tenants'):
+            print(f"   Tenants customer: {json.dumps(data['tenants'].get('customer', {}), indent=2)[:200]}...")
         
         # Insert or update in properties_data table
         if email:
@@ -1007,12 +1082,39 @@ def save_property():
                     print(f"🔄 Existing record found for email {email}, updating...")
                     save_result = supabase.table('properties_data').update(save_data).eq('email', email).execute()
                     print(f"✅ Updated existing property data for email {email}")
+                    
+                    # Verify what was saved
+                    verify_result = supabase.table('properties_data').select('*').eq('email', email).limit(1).execute()
+                    if verify_result.data:
+                        saved_record = verify_result.data[0]
+                        saved_customer = saved_record.get('customer', {})
+                        print(f"\n📋 VERIFICATION - What was actually saved to database:")
+                        print(f"   Record ID: {saved_record.get('id')}")
+                        print(f"   Stored in customer column:")
+                        print(f"      - Has viewMode: {bool(saved_customer.get('viewMode'))}")
+                        print(f"      - Has homeowners: {bool(saved_customer.get('homeowners'))}")
+                        print(f"      - Has tenants: {bool(saved_customer.get('tenants'))}")
+                        if saved_customer.get('tenants'):
+                            print(f"      - Saved tenants data: {json.dumps(saved_customer.get('tenants', {}), indent=2)[:300]}...")
                 else:
                     print(f"📝 No existing record for email {email}, inserting new...")
                     save_result = supabase.table('properties_data').insert(save_data).execute()
                     print(f"✅ Inserted new property data for email {email}")
                     if save_result.data:
                         print(f"   Inserted ID: {save_result.data[0].get('id')}")
+                        # Verify what was saved
+                        verify_result = supabase.table('properties_data').select('*').eq('email', email).limit(1).execute()
+                        if verify_result.data:
+                            saved_record = verify_result.data[0]
+                            saved_customer = saved_record.get('customer', {})
+                            print(f"\n📋 VERIFICATION - What was actually saved to database:")
+                            print(f"   Record ID: {saved_record.get('id')}")
+                            print(f"   Stored in customer column:")
+                            print(f"      - Has viewMode: {bool(saved_customer.get('viewMode'))}")
+                            print(f"      - Has homeowners: {bool(saved_customer.get('homeowners'))}")
+                            print(f"      - Has tenants: {bool(saved_customer.get('tenants'))}")
+                            if saved_customer.get('tenants'):
+                                print(f"      - Saved tenants data: {json.dumps(saved_customer.get('tenants', {}), indent=2)[:300]}...")
             except Exception as e:
                 print(f"❌ Error saving property data: {str(e)}")
                 import traceback
@@ -1041,6 +1143,102 @@ def save_property():
         return jsonify({
             'success': False,
             'error': f'Failed to save property: {str(e)}'
+        }), 500
+
+
+@app.route('/api/save-auto-data', methods=['POST'])
+def save_auto_data():
+    """Save auto dashboard data to Supabase linked to a lead"""
+    try:
+        data = request.json
+        
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
+        
+        print(f"🚗 Saving auto dashboard data to Supabase...")
+        print(f"📊 Data received keys: {list(data.keys())}")
+        
+        # Get email from customer data
+        email = None
+        lead_id = None
+        
+        if data.get('email'):
+            email = data['email'].strip().lower()
+            print(f"✓ Extracted email: {email}")
+        
+        if not email:
+            print(f"⚠️ No email provided")
+            return jsonify({'success': False, 'error': 'Email is required'}), 400
+        
+        # Find lead by email
+        if email:
+            try:
+                result = supabase.table('leads').select('id').eq('email', email).limit(1).execute()
+                if result.data and len(result.data) > 0:
+                    lead_id = result.data[0]['id']
+                    print(f"✅ Found lead by email {email}: {lead_id}")
+            except Exception as e:
+                print(f"⚠️ Error finding lead by email: {str(e)}")
+        
+        # Prepare data for storage
+        save_data = {
+            'email': email,
+            'auto_data': data.get('auto_data', {}),
+            'customer': data.get('customer', {}),
+            'updated_at': datetime.utcnow().isoformat()
+        }
+        
+        # Add lead_id if found
+        if lead_id:
+            save_data['lead_id'] = lead_id
+        
+        print(f"💾 INSERT/UPDATE STEP - lead_id: {lead_id}, email: {email}")
+        print(f"📦 Data to save keys: {list(save_data.keys())}")
+        
+        # Insert or update in auto_data table
+        if email:
+            print(f"💡 Saving auto data by email: {email}")
+            try:
+                # Check if record exists
+                result = supabase.table('auto_data').select('id').eq('email', email).limit(1).execute()
+                if result.data and len(result.data) > 0:
+                    print(f"🔄 Existing record found for email {email}, updating...")
+                    save_result = supabase.table('auto_data').update(save_data).eq('email', email).execute()
+                    print(f"✅ Updated existing auto data for email {email}")
+                else:
+                    print(f"📝 No existing record for email {email}, inserting new...")
+                    save_result = supabase.table('auto_data').insert(save_data).execute()
+                    print(f"✅ Inserted new auto data for email {email}")
+                    if save_result.data:
+                        print(f"   Inserted ID: {save_result.data[0].get('id')}")
+            except Exception as e:
+                print(f"❌ Error saving auto data: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                return jsonify({'success': False, 'error': f'Failed to save: {str(e)}'}), 500
+        else:
+            print(f"❌ Cannot save - no email available")
+            return jsonify({
+                'success': False,
+                'error': 'Cannot save without email'
+            }), 400
+        
+        print(f"✅ Auto data save operation completed")
+        
+        return jsonify({
+            'success': True,
+            'message': 'Auto data saved successfully',
+            'lead_id': lead_id,
+            'email': email
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error saving auto data: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Failed to save auto data: {str(e)}'
         }), 500
 
 

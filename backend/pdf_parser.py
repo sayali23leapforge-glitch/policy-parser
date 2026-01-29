@@ -782,28 +782,15 @@ def extract_mvr_fields(text):
     print(search_text)
     print("=== END NAME SEARCH AREA ===")
     
-    # FIRST: Extract Full Name from MVR - Ontario format: "Name: LASTNAME,FIRSTNAME,MIDDLE Birth Date: ..."
+    # FIRST: Extract Full Name from MVR - Preserve exact format from MVR response
     # Method 1: Direct match for "Name: " followed by text until "Birth Date" or newline
     name_match = re.search(r'Name\s*:\s*([^\n]+?)(?=\s+(?:Birth|Gender|Address|Height|Demerit)|\n)', text, re.IGNORECASE)
     if name_match:
         name_raw = name_match.group(1).strip()
-        # Name format is: LASTNAME,FIRSTNAME,MIDDLE
-        # Convert to: FIRSTNAME LASTNAME MIDDLE (or just use as-is if preferred)
-        if ',' in name_raw:
-            parts = [p.strip() for p in name_raw.split(',')]
-            # Reorder: parts[0]=LASTNAME, parts[1]=FIRSTNAME, parts[2]=MIDDLE (if exists)
-            if len(parts) >= 2:
-                name_formatted = f"{parts[1]} {parts[0]}"
-                if len(parts) > 2 and parts[2]:
-                    name_formatted += f" {parts[2]}"
-                data['name'] = name_formatted
-                print(f" ✓ Found Name (formatted from comma-separated): {data['name']}")
-            else:
-                data['name'] = name_raw
-                print(f" ✓ Found Name (raw): {data['name']}")
-        else:
-            data['name'] = name_raw
-            print(f" ✓ Found Name (raw): {data['name']}")
+        # PRESERVE THE EXACT RAW FORMAT - Do not modify commas, spaces, or any characters
+        # This ensures the displayed name matches the MVR response exactly, regardless of format
+        data['name'] = name_raw
+        print(f" ✓ Found Name (preserved raw format): {data['name']}")
     
     if 'name' not in data:
         print(f" ⚠️  WARNING: Could not extract name from MVR")

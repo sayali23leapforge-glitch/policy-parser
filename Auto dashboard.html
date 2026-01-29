@@ -101,6 +101,7 @@
                         placeholder="Search clients..." 
                         oninput="App.handleSearch(this.value)"
                         onfocus="App.handleSearch(this.value)"
+                        onkeydown="App.handleSearchKey(event)"
                         onblur="App.handleSearchBlur()">
                     <div id="search-results" class="hidden absolute z-50 w-full mt-1 bg-white border border-slate-200 rounded-lg shadow-xl max-h-60 overflow-y-auto hud__search-results"></div>
                 </div>
@@ -597,6 +598,19 @@
                 const urlParams = new URLSearchParams(window.location.search);
                 const hasUrlParams = urlParams.has('name') || urlParams.has('phone') || urlParams.has('email');
                 
+                const name = urlParams.get('name');
+                const phone = urlParams.get('phone');
+                const email = urlParams.get('email');
+                
+                console.log('🔗 URL params:', { name, phone, email });
+                
+                // If email is provided, try to load saved data from backend
+                if (email) {
+                    console.log('📡 Attempting to load saved auto data for email:', email);
+                    this.loadSavedData(email, name, phone);
+                    return; // loadSavedData will handle initialization
+                }
+                
                 // If no URL params, try to restore from localStorage
                 if (!hasUrlParams) {
                     const savedData = localStorage.getItem('autoDashboardDrivers');
@@ -619,16 +633,78 @@
                     }
                 }
                 
+                // Create new client (fallback)
+                this.initializeNewClient(name, phone, email);
+            },
+
+            loadSavedData: async function(email, name, phone) {
+                try {
+                    console.log('📡 Fetching saved auto data from backend...');
+                    const response = await fetch(`${window.location.origin}/api/get-auto-data/${encodeURIComponent(email)}`);
+                    
+                    if (response.ok) {
+                        const result = await response.json();
+                        if (result.success && result.data && result.data.auto_data) {
+                            console.log('✅ Loaded saved auto data:', result.data);
+                            
+                            // Restore drivers from saved data
+                            if (result.data.auto_data.drivers) {
+                                this.drivers = result.data.auto_data.drivers;
+                                this.currDrvIdx = 0;
+                                
+                                // Debug: Log what was loaded
+                                console.log('📊 Loaded driver data:', this.drivers[0]);
+                                console.log('  - convictionsList:', this.drivers[0].convictionsList?.length || 0, 'items');
+                                console.log('  - allPolicies:', this.drivers[0].allPolicies?.length || 0, 'items');
+                                console.log('  - expGDate_base:', this.drivers[0].expGDate_base);
+                                console.log('  - expG2Date_base:', this.drivers[0].expG2Date_base);
+                                console.log('  - expG1Date_base:', this.drivers[0].expG1Date_base);
+                                
+                                // Store original lead
+                                this.originalLead = {
+                                    name: name || result.data.customer?.name || '',
+                                    phone: phone || result.data.customer?.phone || '',
+                                    email: email
+                                };
+                                
+                                console.log('✅ Restored drivers from database');
+                                this.renderSelectors();
+                                this.refreshUI();
+                                
+                                // Show success message
+                                const btn = document.querySelector('button[onclick="App.saveToDatabase()"]');
+                                if (btn) {
+                                    const originalClass = btn.className;
+                                    const originalText = btn.innerHTML;
+                                    btn.className = "group w-full text-xs font-bold text-white bg-blue-600 px-4 py-3 rounded-lg shadow-md flex items-center justify-center gap-2";
+                                    btn.innerHTML = '<i class="fa-solid fa-check-circle"></i> Data Loaded';
+                                    setTimeout(() => {
+                                        btn.className = originalClass;
+                                        btn.innerHTML = originalText;
+                                    }, 2000);
+                                }
+                                return;
+                            }
+                        }
+                    }
+                    
+                    // If no saved data found or error, initialize new client
+                    console.log('ℹ️ No saved data found, initializing new client');
+                    this.initializeNewClient(name, phone, email);
+                    
+                } catch (error) {
+                    console.error('❌ Error loading saved data:', error);
+                    // Fallback to new client
+                    this.initializeNewClient(name, phone, email);
+                }
+            },
+
+            initializeNewClient: function(name, phone, email) {
                 // Create new client
                 this.drivers = [this.createDriver(1)];
                 this.drivers[0].mainRel = 'Principal';
                 this.currDrvIdx = 0; 
                 
-                const name = urlParams.get('name');
-                const phone = urlParams.get('phone');
-                const email = urlParams.get('email');
-                
-                console.log('🔗 URL params:', { name, phone, email });
                 console.log('🔗 URL string:', window.location.search);
                 
                 // Store original lead data from URL params (for restoring when search is cleared)
@@ -651,9 +727,8 @@
                     drv.personalEmail = email;
                     console.log('✅ Email set in driver object:', email);
                 }
-                // NOTE: Name is NOT set in driver object from URL params
-                // It will only be populated from DASH PDF
-                // Only the search field shows the URL param name
+                // Note: mainName should be set manually by user or from PDF parsing
+                // Don't override from URL params as it interferes with MVR/DASH parsing
                 
                 console.log('📦 Driver object after URL params:', {...drv});
                 
@@ -966,8 +1041,28 @@
                 drv.vehicles.forEach((v) => Binder.loadToDom(`vehicle-${v.id}`, v));
                 this.updateFileUI('dash', drv.files?.dash);
                 this.updateFileUI('mvr', drv.files?.mvr);
+                
+                // Render MVR convictions if they exist
+                if (drv.convictionsList && drv.convictionsList.length > 0) {
+                    this.renderConvictions(drv.convictionsList);
+                    console.log('✅ Rendered', drv.convictionsList.length, 'convictions from saved data');
+                    // Update conviction count
+                    const countField = document.querySelector('[data-key="mvrConvictionsCount"]');
+                    if (countField) countField.value = drv.convictionsList.length;
+                } else {
+                    this.renderConvictions([]);
+                    console.log('ℹ️ No convictions in saved data');
+                    const countField = document.querySelector('[data-key="mvrConvictionsCount"]');
+                    if (countField) countField.value = 0;
+                }
 
                 // --- Apply display-only formatting for license experience dates ---
+                console.log('🔧 Applying license experience dates...');
+                console.log('  - expFirstIns_base:', drv.expFirstIns_base);
+                console.log('  - expGDate_base:', drv.expGDate_base);
+                console.log('  - expG2Date_base:', drv.expG2Date_base);
+                console.log('  - expG1Date_base:', drv.expG1Date_base);
+                
                 // First Insurance Date: Display exactly as calculated (NO randomization)
                 const firstInsField = document.querySelector('[data-key="expFirstIns"]');
                 if (firstInsField && drv.expFirstIns_base) {
@@ -1556,6 +1651,7 @@
                             if (data.name) {
                                 drv.personalName = data.name;  // Set to Personal Information Full Name - OVERWRITE
                                 drv.drvName = data.name;       // Also set to Driver Info Full Name - OVERWRITE
+                                drv.mainName = data.name;      // Also set mainName for driver selector and validation
                                 console.log('✅ SET Full Name from MVR to Personal Information:', data.name);
                             } else {
                                 console.log('⚠️  No name found in MVR data');
@@ -2073,6 +2169,10 @@
                 const container = document.getElementById('gap-sections-container');
                 if (!container) return;
 
+                console.log('🔧 renderGapSections called');
+                console.log('  - allPolicies:', drv.allPolicies);
+                console.log('  - allPolicies length:', drv.allPolicies?.length || 0);
+
                 // Clear existing sections
                 container.innerHTML = '';
 
@@ -2090,9 +2190,42 @@
                 const policyCount = drv.allPolicies.length;
                 console.log(`📊 RENDERING ${policyCount - 1} GAP SECTIONS for ${policyCount} policies`);
 
-                // Create gap sections from last policy down to first (comparing adjacent pairs)
-                // i starts from the last policy and goes backwards
-                for (let i = policyCount - 1; i > 0; i--) {
+                // FIRST: Display Policy 1 full details with status badge
+                const firstPolicy = drv.allPolicies[0];
+                const firstPolicyNum = firstPolicy.number || 1;
+                const firstPolicyStatus = firstPolicy.status || 'active'; // Default to 'active' if not specified
+                const statusBadgeText = firstPolicyStatus.toLowerCase() === 'cancelled' ? 'Cancelled' : 'Active';
+                const statusBadgeClass = firstPolicyStatus.toLowerCase() === 'cancelled' 
+                    ? 'bg-rose-100 text-rose-700 border-rose-200' 
+                    : 'bg-emerald-100 text-emerald-700 border-emerald-200';
+
+                console.log(`📋 POLICY 1 DETAILS: Policy #${firstPolicyNum}, Status: ${statusBadgeText}`);
+
+                const policy1HTML = `
+                    <div class="bg-white rounded-xl shadow-soft border border-slate-200 overflow-hidden relative p-6 hover:shadow-md transition-shadow hud__card mb-6">
+                        <div class="absolute top-0 left-0 w-1 h-full bg-indigo-500"></div>
+                        <div class="absolute top-3 right-3 px-3 py-1 rounded-full text-[10px] font-bold uppercase border ${statusBadgeClass}">
+                            ${statusBadgeText}
+                        </div>
+                        <div class="mb-2 text-[10px] font-bold text-slate-400 uppercase">Policy ${firstPolicyNum}</div>
+                        <div class="grid grid-cols-2 gap-4 items-end hud__field-grid">
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">Start of Earliest Term</label>
+                                <input type="text" readonly class="hud__input w-full text-sm font-mono font-bold text-slate-700 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200 text-center shadow-sm" value="${firstPolicy.start_date || '-'}">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-bold text-slate-500 uppercase mb-1">End of Latest Term</label>
+                                <input type="text" readonly class="hud__input w-full text-sm font-mono font-bold text-indigo-700 bg-indigo-50 px-3 py-2 rounded-lg border border-indigo-100 text-center shadow-sm" value="${firstPolicy.end_date || '-'}">
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                container.innerHTML += policy1HTML;
+
+                // Create gap sections from first to second-to-last policy (comparing adjacent pairs)
+                // i starts from 1 and goes up (displaying in ascending order)
+                for (let i = 1; i < policyCount; i++) {
                     const currentPolicy = drv.allPolicies[i];
                     const previousPolicy = drv.allPolicies[i - 1];
                     const currentPolicyNum = currentPolicy.number || (i + 1);
@@ -2160,6 +2293,19 @@
                 const btn = document.querySelector('button[onclick="App.saveToDatabase()"]');
                 const originalText = btn.innerHTML;
                 
+                // Before validation, sync mainName with personalName if mainName is empty
+                this.drivers.forEach((d, i) => { 
+                    if(!d.mainName && d.personalName) {
+                        d.mainName = d.personalName;
+                        console.log(`✅ Synced mainName from personalName for driver ${i + 1}`);
+                    }
+                    // Or use URL param name as fallback
+                    if(!d.mainName && this.originalLead?.name) {
+                        d.mainName = this.originalLead.name;
+                        console.log(`✅ Set mainName from URL param for driver ${i + 1}:`, this.originalLead.name);
+                    }
+                });
+                
                 // Validate required fields
                 let valid = true;
                 this.drivers.forEach((d, i) => { if(!d.mainName) valid = false; });
@@ -2217,7 +2363,8 @@
                             mvrDemerits: drv.mvrDemerits,
                             mvrClass: drv.mvrClass,
                             mvrConditions: drv.mvrConditions,
-                            mvrConvictions: drv.mvrConvictions,
+                            mvrConvictionsCount: drv.mvrConvictionsCount,
+                            convictionsList: drv.convictionsList || [],
                             mvrConvictionDate: drv.mvrConvictionDate,
                             mvrConvictionDesc: drv.mvrConvictionDesc,
                             
@@ -2230,13 +2377,18 @@
                             // License Experience
                             expIssueDate: drv.expIssueDate,
                             expFirstIns: drv.expFirstIns,
+                            expFirstIns_base: drv.expFirstIns_base,
                             expGDate: drv.expGDate,
+                            expGDate_base: drv.expGDate_base,
                             expG2Date: drv.expG2Date,
+                            expG2Date_base: drv.expG2Date_base,
                             expG1Date: drv.expG1Date,
+                            expG1Date_base: drv.expG1Date_base,
                             
                             // Gap Calculation
                             gapStart: drv.gapStart,
                             gapEnd: drv.gapEnd,
+                            allPolicies: drv.allPolicies,
                             
                             // Files
                             files: drv.files,
@@ -2251,24 +2403,37 @@
                     };
                     
                     console.log("💾 Saving complete client data:", clientData);
-                                        // Debug: Log gapStart and gapEnd for each driver before saving
-                                        clientData.drivers.forEach((drv, idx) => {
-                                            console.log(`[SAVE DEBUG] Driver #${idx+1} gapStart:`, drv.gapStart, 'gapEnd:', drv.gapEnd);
-                                        });
+                    // Debug: Log gapStart and gapEnd for each driver before saving
+                    clientData.drivers.forEach((drv, idx) => {
+                        console.log(`[SAVE DEBUG] Driver #${idx+1} gapStart:`, drv.gapStart, 'gapEnd:', drv.gapEnd);
+                    });
                     
-                    // Send to backend
-                    const response = await fetch(`${window.location.origin}/api/save-client`, {
+                    // Prepare data for new API endpoint
+                    const savePayload = {
+                        email: this.drivers[0].personalEmail || this.originalLead?.email || '',
+                        auto_data: clientData,
+                        customer: {
+                            name: this.drivers[0].personalName || this.originalLead?.name || '',
+                            phone: this.drivers[0].personalMobile || this.originalLead?.phone || '',
+                            email: this.drivers[0].personalEmail || this.originalLead?.email || ''
+                        }
+                    };
+                    
+                    console.log("📤 Sending to backend:", savePayload);
+                    
+                    // Send to backend using new endpoint
+                    const response = await fetch(`${window.location.origin}/api/save-auto-data`, {
                         method: 'POST',
                         headers: {
                             'Content-Type': 'application/json',
                         },
-                        body: JSON.stringify(clientData)
+                        body: JSON.stringify(savePayload)
                     });
                     
                     const result = await response.json();
                     
                     if (result.success) {
-                        console.log("✅ Client data saved successfully:", result);
+                        console.log("✅ Auto data saved successfully:", result);
                         btn.className = "group w-full text-xs font-bold text-white bg-gradient-to-r from-emerald-600 to-emerald-500 px-4 py-3 rounded-lg shadow-md flex items-center justify-center gap-2";
                         btn.innerHTML = '<i class="fa-solid fa-check"></i> Saved Successfully';
                         // Recalculate insurance gap after save
@@ -2318,11 +2483,14 @@
                     if (result.data && Array.isArray(result.data)) {
                         console.log(`✅ Got ${result.data.length} total leads from backend`);
                         
-                        // Filter leads by name (case-insensitive, starts with)
+                        // Filter leads by name/email/phone (case-insensitive, includes)
                         const searchTerm = val.toLowerCase().trim();
-                        const matches = result.data.filter(lead => 
-                            lead.name && lead.name.toLowerCase().startsWith(searchTerm)
-                        );
+                        const matches = result.data.filter(lead => {
+                            const name = (lead.name || '').toLowerCase();
+                            const email = (lead.email || '').toLowerCase();
+                            const phone = (lead.phone || '').toLowerCase();
+                            return name.includes(searchTerm) || email.includes(searchTerm) || phone.includes(searchTerm);
+                        });
                         
                         console.log(`🎯 Found ${matches.length} matching leads`);
                         
@@ -2332,7 +2500,8 @@
                                 <div class="search-result-item px-4 py-2.5 hover:bg-indigo-50 cursor-pointer border-b border-slate-100 last:border-0 transition-colors" 
                                      data-name="${(lead.name || '').replace(/"/g, '&quot;')}"
                                      data-phone="${(lead.phone || '').replace(/"/g, '&quot;')}"
-                                     data-email="${(lead.email || '').replace(/"/g, '&quot;')}">
+                                     data-email="${(lead.email || '').replace(/"/g, '&quot;')}"
+                                     data-id="${(lead.id || '').replace(/"/g, '&quot;')}">
                                     <div class="flex items-center justify-between">
                                         <div>
                                             <div class="text-sm font-bold text-slate-800">${lead.name || 'No Name'}</div>
@@ -2350,7 +2519,8 @@
                                         const name = item.getAttribute('data-name');
                                         const phone = item.getAttribute('data-phone');
                                         const email = item.getAttribute('data-email');
-                                        App.selectLead(name, phone, email);
+                                        const leadId = item.getAttribute('data-id');
+                                        App.selectLead(name, phone, email, leadId);
                                     });
                                 });
                             }, 0);
@@ -2372,6 +2542,33 @@
                     resultsDiv.classList.remove('hidden');
                 }
             },
+
+            handleSearchKey: function(event) {
+                if (event.key !== 'Enter') return;
+                event.preventDefault();
+
+                const input = event.target;
+                const value = input ? input.value : '';
+                const resultsDiv = document.getElementById('search-results');
+                const selectFirst = () => {
+                    const first = resultsDiv ? resultsDiv.querySelector('.search-result-item') : null;
+                    if (first) {
+                        const name = first.getAttribute('data-name');
+                        const phone = first.getAttribute('data-phone');
+                        const email = first.getAttribute('data-email');
+                        const leadId = first.getAttribute('data-id');
+                        this.selectLead(name, phone, email, leadId);
+                    }
+                };
+
+                // If results already rendered, select immediately; otherwise trigger search then select
+                if (resultsDiv && resultsDiv.querySelector('.search-result-item')) {
+                    selectFirst();
+                } else {
+                    this.handleSearch(value);
+                    setTimeout(selectFirst, 200);
+                }
+            },
             
             handleSearchBlur: function() {
                 // Hide dropdown after a delay to allow clicks to register
@@ -2389,8 +2586,8 @@
                 }
             },
             
-            selectLead: async function(name, phone, email) {
-                console.log('👤 Selecting lead:', {name, phone, email});
+            selectLead: async function(name, phone, email, leadId) {
+                console.log('👤 Selecting lead:', {name, phone, email, leadId});
                 // Populate search box with name
                 const searchInput = document.getElementById('client-search');
                 if (searchInput) {
@@ -2398,28 +2595,41 @@
                     console.log('✅ Search box updated with:', name);
                 }
                 // Store original lead info for search restore
-                this.originalLead = { name, phone, email };
+                this.originalLead = { name, phone, email, leadId };
                 localStorage.setItem('autoDashboardOriginalLead', JSON.stringify(this.originalLead));
 
                 // Try to load saved data for this lead from database
                 let foundData = false;
-                if (email) {
-                    try {
-                        console.log('📂 Fetching saved data for:', email);
-                        const response = await fetch(`${window.location.origin}/api/get-client-data/${encodeURIComponent(email)}`);
-                        const result = await response.json();
-                        if (result.success && result.data && result.data.drivers) {
-                            console.log('✅ Loaded saved drivers data:', result.data.drivers);
-                            // Restore the saved drivers data
-                            this.drivers = result.data.drivers;
-                            this.currDrvIdx = 0;
-                            foundData = true;
-                        } else {
-                            console.log('ℹ️ No saved data found for this lead, resetting to blank/default.');
-                        }
-                    } catch (error) {
-                        console.warn('⚠️ Could not load saved data:', error);
+                const tryFetchSaved = async (query) => {
+                    if (!query) return null;
+                    console.log('📂 Fetching saved data for:', query);
+                    const response = await fetch(`${window.location.origin}/api/get-auto-data/${encodeURIComponent(query)}`);
+                    const result = await response.json();
+                    if (result.success && result.data && result.data.auto_data?.drivers) {
+                        return result.data.auto_data.drivers;
                     }
+                    return null;
+                };
+
+                try {
+                    let drivers = null;
+                    if (leadId) {
+                        drivers = await tryFetchSaved(leadId);
+                    }
+                    if (!drivers && email) {
+                        drivers = await tryFetchSaved(email);
+                    }
+
+                    if (drivers) {
+                        console.log('✅ Loaded saved drivers data:', drivers);
+                        this.drivers = drivers;
+                        this.currDrvIdx = 0;
+                        foundData = true;
+                    } else {
+                        console.log('ℹ️ No saved data found for this lead, resetting to blank/default.');
+                    }
+                } catch (error) {
+                    console.warn('⚠️ Could not load saved data:', error);
                 }
                 if (!foundData) {
                     // Reset to new client and populate with search lead info
