@@ -19,12 +19,13 @@ import requests
 from datetime import datetime
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
+from flask_socketio import SocketIO, emit, join_room
 from dotenv import load_dotenv
 from supabase import create_client, Client
 import hmac
 import hashlib
 # Import pdf_parser using relative import
-from .pdf_parser import parse_mvr_pdf, parse_dash_pdf
+from .pdf_parser import parse_mvr_pdf, parse_dash_pdf, parse_quote_pdf
 
 # Load environment variables
 load_dotenv(os.path.join(os.path.dirname(__file__), '../.env.local'))
@@ -33,6 +34,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '../.env.local'))
 STATIC_FOLDER = os.path.join(os.path.dirname(__file__), '..')
 app = Flask(__name__, static_folder=STATIC_FOLDER, static_url_path='')
 CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 # ========== CONFIG ==========
 META_APP_ID = os.getenv('META_APP_ID')
@@ -45,6 +47,11 @@ FB_PIXEL_ID = os.getenv('FB_PIXEL_ID')
 
 SUPABASE_URL = os.getenv('VITE_SUPABASE_URL')
 SUPABASE_KEY = os.getenv('VITE_SUPABASE_SERVICE_ROLE_KEY')
+
+# Zoho OAuth (for token exchange)
+ZOHO_CLIENT_ID = os.getenv('ZOHO_CLIENT_ID')
+ZOHO_CLIENT_SECRET = os.getenv('ZOHO_CLIENT_SECRET')
+ZOHO_REDIRECT_URI = os.getenv('ZOHO_REDIRECT_URI')
 
 # Debug: Print Supabase URL
 print(f"🔗 Supabase URL: {SUPABASE_URL}")
@@ -267,25 +274,65 @@ def health():
     return jsonify({'status': 'ok', 'service': 'Meta Lead Dashboard Backend'}), 200
 
 
-@app.route('/api/leads', methods=['GET'])
-def get_leads():
-    """Get leads from database for instant load"""
+@app.route('/api/leads/from-facebook', methods=['GET'])
+def get_leads_from_facebook():
+    """Get ALL leads from Facebook Leads Center (not from database)"""
     try:
-        filters = {}
-        if request.args.get('type'):
-            filters['type'] = request.args.get('type')
-        if request.args.get('status'):
-            filters['status'] = request.args.get('status')
+        print("📱 Fetching leads from Facebook Leads Center...")
         
-        print("📊 Loading leads from database (instant)...")
-        leads = get_leads_from_db(filters)
+        if not META_LEAD_FORM_ID:
+            return jsonify({'success': False, 'error': 'Lead form ID not configured'}), 400
         
-        print(f"📤 Returning {len(leads)} leads from database")
-        return jsonify({'data': leads, 'count': len(leads)}), 200
+        # Fetch leads from Facebook Leads API for this form
+        url = f'{META_BASE_URL}/{META_LEAD_FORM_ID}/leads'
+        params = {
+            'fields': 'id,created_time,field_data,ad_id,form_id',
+            'access_token': META_PAGE_ACCESS_TOKEN,
+            'limit': 1000
+        }
+        
+        response = requests.get(url, params=params)
+        response.raise_for_status()
+        
+        facebook_leads = response.json().get('data', [])
+        print(f"📋 Fetched {len(facebook_leads)} leads from Facebook Leads Center")
+        
+        # Parse all leads from Facebook format
+        parsed_leads = []
+        for fb_lead in facebook_leads:
+            parsed = parse_meta_lead(fb_lead)
+            parsed_leads.append(parsed)
+        
+        # Sort by date (newest first)
+        parsed_leads.sort(key=lambda x: x.get('created_at', ''), reverse=True)
+        
+        return jsonify({
+            'success': True,
+            'data': parsed_leads,
+            'count': len(parsed_leads),
+            'source': 'facebook_leads_center'
+        }), 200
         
     except Exception as e:
-        print(f"❌ Error loading leads from database: {str(e)}")
+        print(f"❌ Error fetching from Facebook: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/leads/manual', methods=['GET'])
+def get_manual_leads():
+    """Get manual leads from database only"""
+    try:
+        response = supabase.table('leads').select('*').eq('is_manual', True).order('created_at', desc=True).execute()
+        return jsonify({'success': True, 'data': response.data or [], 'count': len(response.data or [])}), 200
+    except Exception as e:
+        print(f"❌ Error loading manual leads: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/leads', methods=['GET'])
+def get_leads():
+    """Get leads from Facebook Leads Center (database is write-only)"""
+    return get_leads_from_facebook()
 
 
 @app.route('/api/leads/sync', methods=['POST'])
@@ -587,7 +634,14 @@ def update_signal(lead_id):
 
 @app.route('/webhook', methods=['GET', 'POST'])
 def webhook():
-    """Meta webhook endpoint for incoming leads"""
+    """Meta webhook endpoint for real-time Facebook Lead Ads via leadgen webhook
+    
+    FLOW:
+    1. Receive leadgen event from Facebook webhook
+    2. Fetch full lead details from Graph API
+    3. PUSH IMMEDIATELY to all connected Meta Dashboard clients via WebSocket
+    4. Then save to database (storage only)
+    """
     
     if request.method == 'GET':
         # Webhook verification
@@ -595,40 +649,132 @@ def webhook():
         hub_verify_token = request.args.get('hub.verify_token')
         
         if hub_verify_token != META_WEBHOOK_VERIFY_TOKEN:
+            print(f"❌ Webhook verification failed: {hub_verify_token} != {META_WEBHOOK_VERIFY_TOKEN}")
             return 'Invalid verify token', 403
         
+        print(f"✅ Webhook verification successful")
         return hub_challenge, 200
     
     elif request.method == 'POST':
         # Verify signature
         hub_signature = request.headers.get('X-Hub-Signature-256', '')
         if not verify_meta_webhook(request.data, hub_signature):
+            print(f"❌ Webhook signature verification failed")
             return 'Invalid signature', 403
         
         data = request.get_json()
+        print(f"📨 Webhook POST received")
         
-        # Process incoming leads
+        # Process leadgen event (new lead created on Facebook)
         entry = data.get('entry', [{}])[0]
-        messaging = entry.get('messaging', [])
+        changes = entry.get('changes', [])
         
-        for msg in messaging:
-            if msg.get('message', {}).get('is_echo'):
-                continue
+        for change in changes:
+            field = change.get('field')
+            value = change.get('value', {})
             
-            sender_id = msg.get('sender', {}).get('id')
-            message = msg.get('message', {}).get('text', '')
+            # Handle leadgen_id webhook event
+            if field == 'leadgen':
+                leadgen_id = value.get('leadgen_id')
+                print(f"📝 New leadgen event - ID: {leadgen_id}")
+                
+                if leadgen_id:
+                    # Fetch full lead details from Meta Graph API
+                    lead_details = fetch_leadgen_details(leadgen_id)
+                    
+                    if lead_details:
+                        # Parse lead data
+                        parsed_lead = parse_meta_lead(lead_details)
+                        
+                        # STEP 1: IMMEDIATELY PUSH TO ALL CONNECTED DASHBOARD CLIENTS
+                        print(f"⚡ PUSHING lead to connected dashboard clients: {parsed_lead.get('name')}")
+                        socketio.emit('new_lead', {
+                            'lead': parsed_lead,
+                            'timestamp': datetime.utcnow().isoformat(),
+                            'source': 'webhook'
+                        }, room='dashboard')
+                        
+                        # STEP 2: Save to database (storage only, not for display)
+                        saved = save_lead_to_supabase(parsed_lead)
+                        
+                        if saved:
+                            print(f"✅ Lead saved to database from webhook: {parsed_lead.get('name')}")
+                            return jsonify({'success': True, 'lead_id': saved.get('id')}), 200
+                        else:
+                            print(f"✅ Lead pushed to dashboard (database save returned None)")
+                            return jsonify({'success': True}), 200
+                    else:
+                        print(f"❌ Failed to fetch lead details for {leadgen_id}")
+                        return jsonify({'success': False, 'error': 'Failed to fetch lead details'}), 500
             
-            # Save to Supabase
-            lead_data = {
-                'meta_user_id': sender_id,
-                'message': message,
-                'created_at': datetime.utcnow().isoformat(),
-                'status': 'New Lead',
-                'is_manual': False
-            }
-            save_lead_to_supabase(lead_data)
+            # Handle messaging webhook events (backward compatibility)
+            elif field == 'messages':
+                messaging = value.get('messaging', [])
+                for msg in messaging:
+                    if msg.get('message', {}).get('is_echo'):
+                        continue
+                    
+                    sender_id = msg.get('sender', {}).get('id')
+                    message = msg.get('message', {}).get('text', '')
+                    
+                    lead_data = {
+                        'meta_user_id': sender_id,
+                        'message': message,
+                        'created_at': datetime.utcnow().isoformat(),
+                        'status': 'New Lead',
+                        'is_manual': False
+                    }
+                    save_lead_to_supabase(lead_data)
         
         return jsonify({'success': True}), 200
+
+
+# ========== WEBSOCKET ENDPOINTS ==========
+
+@socketio.on('connect')
+def handle_connect():
+    """Handle client connection to WebSocket"""
+    print(f"👤 Client connected: {request.sid}")
+    emit('connection_response', {'data': 'Connected to real-time lead server'})
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handle client disconnection from WebSocket"""
+    print(f"👤 Client disconnected: {request.sid}")
+
+@socketio.on('join_dashboard')
+def on_join_dashboard():
+    """Client joins the dashboard room to receive live lead updates"""
+    join_room('dashboard')
+    print(f"📊 Client joined dashboard room: {request.sid}")
+    emit('joined_dashboard', {'data': 'You are now receiving live lead updates'})
+
+
+
+def fetch_leadgen_details(leadgen_id):
+    """Fetch full lead details from Facebook Graph API using leadgen_id"""
+    try:
+        url = f'{META_BASE_URL}/{leadgen_id}'
+        
+        params = {
+            'fields': 'id,created_time,field_data,ad_id,form_id',
+            'access_token': META_PAGE_ACCESS_TOKEN
+        }
+        
+        print(f"🔍 Fetching leadgen details for {leadgen_id}")
+        response = requests.get(url, params=params)
+        print(f"📡 Graph API Response Status: {response.status_code}")
+        response.raise_for_status()
+        
+        lead_data = response.json()
+        print(f"✅ Lead details fetched: {lead_data}")
+        return lead_data
+        
+    except Exception as e:
+        print(f"❌ Error fetching leadgen details: {str(e)}")
+        if hasattr(e, 'response'):
+            print(f"❌ Meta API Error Response: {e.response.text if e.response else 'No response'}")
+        return None
 
 
 # ========== PDF PARSING ENDPOINT ==========
@@ -707,6 +853,40 @@ def parse_dash():
             'raw_text': result['raw_text'][:1000]  # First 1000 chars for debugging
         }), 200
         
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': f'Server error: {str(e)}'
+        }), 500
+
+
+@app.route('/api/parse-quote', methods=['POST'])
+def parse_quote():
+    """Parse uploaded Auto Quote PDF and extract coverage information"""
+    try:
+        if 'file' not in request.files:
+            return jsonify({'success': False, 'error': 'No file uploaded'}), 400
+
+        file = request.files['file']
+
+        if file.filename == '':
+            return jsonify({'success': False, 'error': 'Empty filename'}), 400
+
+        if not file.filename.lower().endswith('.pdf'):
+            return jsonify({'success': False, 'error': 'Only PDF files are supported'}), 400
+
+        pdf_content = file.read()
+
+        result = parse_quote_pdf(pdf_content)
+
+        if not result['success']:
+            return jsonify(result), 400
+
+        return jsonify({
+            'success': True,
+            'data': result['data']
+        }), 200
+
     except Exception as e:
         return jsonify({
             'success': False,
@@ -1240,6 +1420,195 @@ def save_auto_data():
             'success': False,
             'error': f'Failed to save auto data: {str(e)}'
         }), 500
+
+
+# ========== ZOHO SIGNER INTEGRATION ==========
+
+import uuid
+from werkzeug.utils import secure_filename
+
+# Configure upload folder
+UPLOAD_FOLDER = os.path.join(os.path.dirname(__file__), '..', 'uploads')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+ALLOWED_EXTENSIONS = {'pdf'}
+
+def allowed_file(filename):
+    """Check if file has allowed extension"""
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+@app.route('/process-form', methods=['POST'])
+def process_form():
+    """
+    Process ZohoSigner form submission
+    Accepts: PDF file + form fields (multipart/form-data)
+    Returns: form_id and status
+    """
+    try:
+        # Check if PDF file is present
+        if 'pdf_file' not in request.files:
+            return jsonify({
+                'success': False,
+                'error': 'No PDF file provided'
+            }), 400
+        
+        pdf_file = request.files['pdf_file']
+        
+        if pdf_file.filename == '':
+            return jsonify({
+                'success': False,
+                'error': 'No file selected'
+            }), 400
+        
+        if not allowed_file(pdf_file.filename):
+            return jsonify({
+                'success': False,
+                'error': 'Only PDF files are allowed'
+            }), 400
+        
+        # Extract form data from request
+        form_name = request.form.get('form_name', 'Unknown Form')
+        signer_email = request.form.get('signer_email', '')
+        signer_name = request.form.get('signer_name', '')
+        broker_email = request.form.get('broker_email', '')
+        broker_name = request.form.get('broker_name', '')
+        
+        # Generate unique form_id
+        form_id = str(uuid.uuid4())
+        
+        # Create secure filename
+        original_filename = secure_filename(pdf_file.filename)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        saved_filename = f"{form_id}_{timestamp}_{original_filename}"
+        file_path = os.path.join(UPLOAD_FOLDER, saved_filename)
+        
+        # Save PDF file
+        pdf_file.save(file_path)
+        print(f"✅ PDF saved to: {file_path}")
+        
+        # Insert record into Supabase zoho_forms table
+        zoho_form_data = {
+            'form_id': form_id,
+            'form_name': form_name,
+            'signer_email': signer_email,
+            'signer_name': signer_name,
+            'broker_email': broker_email,
+            'broker_name': broker_name,
+            'original_file_path': file_path,
+            'saved_filename': saved_filename,
+            'status': 'pending_signature',
+            'created_at': datetime.utcnow().isoformat()
+        }
+        
+        # Save to Supabase
+        result = supabase.table('zoho_forms').insert(zoho_form_data).execute()
+        print(f"✅ Form record saved to Supabase: {form_id}")
+        
+        # Return success response
+        return jsonify({
+            'success': True,
+            'form_id': form_id,
+            'status': 'pending_signature',
+            'message': 'Form processed successfully'
+        }), 200
+        
+    except Exception as e:
+        print(f"❌ Error processing form: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({
+            'success': False,
+            'error': f'Failed to process form: {str(e)}'
+        }), 500
+
+
+@app.route('/zoho-webhook', methods=['POST', 'GET'])
+def zoho_webhook():
+    """
+    Placeholder for Zoho signature webhook
+    Will be used to receive signature completion notifications from Zoho
+    """
+    try:
+        if request.method == 'GET':
+            return jsonify({'status': 'webhook endpoint ready'}), 200
+        
+        if request.method == 'POST':
+            webhook_data = request.json or request.form
+            print(f"📨 Zoho webhook received: {webhook_data}")
+            
+            # TODO: Process webhook payload when Zoho integration is enabled
+            # - Update form status based on signature completion
+            # - Trigger notifications
+            # - Archive completed documents
+            
+            return jsonify({'success': True, 'status': 'webhook received'}), 200
+    
+    except Exception as e:
+        print(f"❌ Error processing webhook: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/oauth/callback', methods=['GET'])
+def oauth_callback():
+    """
+    Handle OAuth2 authorization code exchange with Zoho
+    """
+    import sys
+    try:
+        # Get the code - Zoho may add extra params like location and accounts-server
+        auth_code = request.args.get('code')
+        error = request.args.get('error')
+        
+        # Debug logging with immediate flush
+        msg = f"\n{'='*60}\n🔐 OAuth Callback Received\nCode: {auth_code}\nError: {error}\nAll params: {request.args}\n{'='*60}\n"
+        print(msg, flush=True)
+        sys.stdout.flush()
+
+        if error:
+            return jsonify({'success': False, 'error': f'Zoho auth error: {error}', 'error_param': error}), 400
+
+        if not auth_code:
+            return jsonify({'success': False, 'error': 'Missing authorization code'}), 400
+
+        token_url = 'https://accounts.zoho.in/oauth/v2/token'
+        
+        # **IMPORTANT**: Use redirect_uri WITHOUT extra parameters (without ?location=in etc)
+        payload = {
+            'code': auth_code,
+            'client_id': ZOHO_CLIENT_ID,
+            'client_secret': ZOHO_CLIENT_SECRET,
+            'redirect_uri': ZOHO_REDIRECT_URI,  # This must match exactly what was configured
+            'grant_type': 'authorization_code'
+        }
+        
+        print(f"📤 Sending token request...\nRedirect URI: {ZOHO_REDIRECT_URI}\n", flush=True)
+        sys.stdout.flush()
+
+        response = requests.post(token_url, data=payload, timeout=30)
+        
+        print(f"📥 Status: {response.status_code}\nResponse: {response.text[:500]}\n", flush=True)
+        sys.stdout.flush()
+
+        try:
+            data = response.json()
+        except Exception:
+            return jsonify({'success': False, 'error': 'Invalid JSON response from Zoho', 'raw': response.text[:500]}), 502
+
+        # Check for tokens
+        if 'access_token' in data:
+            print(f"✅ ACCESS TOKEN: {data.get('access_token')[:30]}...\n", flush=True)
+        if 'refresh_token' in data:
+            print(f"✅ REFRESH TOKEN: {data.get('refresh_token')[:30]}...\n", flush=True)
+        else:
+            print(f"⚠️ No refresh_token in response\n", flush=True)
+            
+        sys.stdout.flush()
+        return jsonify(data), response.status_code
+        
+    except Exception as e:
+        import traceback
+        print(f"❌ Error: {str(e)}\n{traceback.format_exc()}\n", flush=True)
+        sys.stdout.flush()
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 
 # ========== INITIALIZATION ==========

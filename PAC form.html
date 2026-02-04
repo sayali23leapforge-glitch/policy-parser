@@ -1,0 +1,772 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Broker PDF Wizard (Vector Export)</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- PDF.js (For Preview) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    
+    <!-- PDF-Lib (For High Quality Vector Export) -->
+    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+    
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f1f1; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .cursor-grab { cursor: grab; }
+        .cursor-grabbing { cursor: grabbing; }
+        .fade-in { animation: fadeIn 0.3s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        
+        /* Ensure popovers sit on top of everything */
+        .popover-content { z-index: 100 !important; }
+        
+        /* Focus Mode Transitions */
+        .sidebar-content { transition: opacity 0.3s ease, filter 0.3s ease; }
+        .focus-dimmed { opacity: 0.4; pointer-events: none; filter: grayscale(100%); }
+        .canvas-highlight { box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.5); border-radius: 4px; }
+    </style>
+
+    <!-- FIXED: Tailwind custom classes must be in head with correct type -->
+    <style type="text/tailwindcss">
+        .label-text { @apply block text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-1; }
+        .input-field { @apply w-full px-2 py-1.5 bg-white border border-gray-200 rounded text-sm focus:border-blue-500 outline-none transition-shadow focus:shadow-sm; }
+        .checkbox-wrapper { @apply flex items-center gap-2 p-2 border border-gray-200 rounded hover:bg-gray-50 cursor-pointer text-xs font-medium text-gray-700 select-none; }
+        .control-btn { @apply px-3 py-1.5 rounded-md text-xs font-medium flex items-center gap-2 transition-all text-gray-600 hover:text-gray-900 border border-transparent; }
+        .control-btn.active { @apply bg-white text-blue-600 shadow-sm border-gray-200; }
+        .tab-btn { @apply flex-1 pb-2 text-xs font-bold border-b-2 transition-colors text-center; }
+        .tab-btn.active { @apply border-blue-600 text-blue-600; }
+        .tab-btn.inactive { @apply border-transparent text-gray-400 hover:text-gray-600; }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans h-screen flex overflow-hidden">
+
+    <!-- LEFT SIDEBAR (Data Entry) -->
+    <aside class="w-96 bg-white border-r border-gray-200 flex flex-col shadow-xl z-30 no-print flex-shrink-0 relative">
+        <div class="p-6 border-b border-gray-200 bg-blue-50">
+            <div class="mb-3 flex gap-2">
+                <a href="Auto dashboard.html" class="inline-flex items-center justify-center w-8 h-8 text-blue-600 hover:text-blue-700 hover:bg-blue-100 rounded-lg transition-all border border-blue-200 hover:border-blue-300 shadow-sm" title="Back to Dashboard">
+                    <i data-lucide="arrow-left" class="w-4 h-4"></i>
+                </a>
+                <button onclick="autoFillFromDashboard()" class="inline-flex items-center gap-1 px-2 py-1.5 text-xs font-bold text-blue-600 hover:text-blue-700 hover:bg-blue-100 rounded-lg transition-all border border-blue-200 hover:border-blue-300 shadow-sm" title="Auto-fill from Dashboard">
+                    <i data-lucide="refresh-cw" class="w-3 h-3"></i> Auto Fill
+                </button>
+            </div>
+            <h1 class="text-xl font-bold text-gray-800 flex items-center gap-2">
+                <i data-lucide="file-check" class="text-blue-600"></i>
+                <span>Broker Wizard</span>
+            </h1>
+            <p class="text-xs text-blue-600 mt-1 font-medium flex justify-between items-center">
+                <span>Vector PDF Generator</span>
+                <span class="text-[10px] opacity-70 bg-blue-100 px-1.5 py-0.5 rounded">Alt+L: Lock</span>
+            </p>
+        </div>
+
+        <div id="sidebar-scroll-area" class="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar sidebar-content">
+            
+            <!-- Company Selector -->
+            <div class="space-y-4 bg-yellow-50 p-4 rounded-lg border border-yellow-100">
+                <h3 class="text-xs font-bold text-yellow-800 uppercase tracking-wider mb-2 flex items-center gap-2">
+                    <i data-lucide="settings-2" class="w-3 h-3"></i> 1. Select Template
+                </h3>
+                <div class="relative">
+                    <select id="input-company" class="w-full pl-10 pr-4 py-2 bg-white border border-gray-200 rounded-lg text-gray-700 text-sm font-medium focus:border-blue-500 outline-none cursor-pointer shadow-sm">
+                        <option value="aviva">Aviva</option>
+                        <option value="intact">Intact</option>
+                        <option value="wawanesa">Wawanesa</option>
+                        <option value="economical">Economical</option>
+                        <option value="travelers">Travelers</option>
+                        <option value="pembridge">Pembridge</option>
+                        <option value="optimum">Optimum</option>
+                        <option value="pafco">Pafco</option>
+                        <option value="jevco">Jevco</option>
+                        <option value="max">Max Insurance</option>
+                        <option value="unica">Unica</option>
+                    </select>
+                    <div class="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">
+                        <i data-lucide="building" class="w-4 h-4"></i>
+                    </div>
+                </div>
+                <p id="template-status" class="text-xs mt-1 text-gray-500"></p>
+            </div>
+
+            <!-- Form Data Entry -->
+            <div class="space-y-4">
+                <h3 class="text-xs font-bold text-gray-900 uppercase border-b pb-2">2. Enter Details</h3>
+                
+                <!-- Broker & Date -->
+                <div>
+                    <label class="label-text">Broker Name</label>
+                    <select id="input-brokerName" class="input-field">
+                        <option value="Eldho George">Eldho George</option>
+                        <option value="">(Blank)</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="label-text">Date</label>
+                    <div class="flex gap-2">
+                        <input type="date" id="input-date" class="input-field flex-1">
+                        <button id="btn-today" class="px-3 py-2 bg-blue-100 text-blue-700 text-xs font-bold rounded-lg hover:bg-blue-200 transition-colors">Today</button>
+                    </div>
+                </div>
+
+                <!-- Checkboxes -->
+                <div>
+                    <label class="label-text mb-2 block">Service Type</label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <label class="checkbox-wrapper"><input type="checkbox" id="checkMonthly"><span>Monthly</span></label>
+                        <label class="checkbox-wrapper"><input type="checkbox" id="checkFullPay"><span>Full Pay</span></label>
+                        <label class="checkbox-wrapper"><input type="checkbox" id="checkPersonal"><span>Personal</span></label>
+                        <label class="checkbox-wrapper"><input type="checkbox" id="checkBusiness"><span>Business</span></label>
+                    </div>
+                </div>
+
+                <!-- Client Info -->
+                <div class="grid grid-cols-2 gap-2">
+                    <div><label class="label-text">First Name</label><input type="text" id="input-firstName" class="input-field"></div>
+                    <div><label class="label-text">Policy Num</label><input type="text" id="input-policyNumber" class="input-field"></div>
+                </div>
+                <div><label class="label-text">Address</label><input type="text" id="input-address" class="input-field"></div>
+                <div class="grid grid-cols-3 gap-2">
+                    <div class="col-span-1"><label class="label-text">City</label><input type="text" id="input-city" class="input-field"></div>
+                    <div class="col-span-1"><label class="label-text">Prov</label><input type="text" id="input-province" class="input-field"></div>
+                    <div class="col-span-1"><label class="label-text">Postal</label><input type="text" id="input-postalCode" class="input-field"></div>
+                </div>
+
+                <!-- Payment Method (Tabs) -->
+                <div class="pt-2">
+                    <div class="flex border-b border-gray-200 mb-4">
+                        <button id="tab-bank" class="tab-btn active">Bank Details</button>
+                        <button id="tab-cc" class="tab-btn inactive">Credit Card</button>
+                    </div>
+
+                    <!-- Banking Inputs (Default) -->
+                    <div id="group-banking" class="space-y-4 animate-in fade-in duration-300">
+                        <div><label class="label-text">Bank Name</label><input type="text" id="input-bankName" class="input-field"></div>
+                        <div class="bg-gray-50 p-3 rounded border border-gray-200 grid grid-cols-3 gap-2">
+                            <div><label class="label-text text-center">Transit(5)</label><input type="text" id="input-transit" class="input-field text-center"></div>
+                            <div><label class="label-text text-center">Inst(3)</label><input type="text" id="input-institution" class="input-field text-center"></div>
+                            <div><label class="label-text text-center">Account</label><input type="text" id="input-account" class="input-field text-center"></div>
+                        </div>
+                    </div>
+
+                    <!-- Credit Card Inputs (Hidden) -->
+                    <div id="group-cc" class="hidden space-y-4 animate-in fade-in duration-300">
+                        <div>
+                            <label class="label-text">Card Type</label>
+                            <select id="input-ccType" class="input-field">
+                                <option value="Visa">Visa</option>
+                                <option value="Mastercard">Mastercard</option>
+                                <option value="Amex">American Express</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="label-text">Card Number</label>
+                            <div class="relative">
+                                <input type="text" id="input-ccNumber" class="input-field pl-8" placeholder="0000 0000 0000 0000">
+                                <i data-lucide="credit-card" class="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400"></i>
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-2 gap-2">
+                            <div><label class="label-text">Expiry (MM/YY)</label><input type="text" id="input-ccExpiry" class="input-field" placeholder="MM/YY"></div>
+                            <div><label class="label-text">CVC</label><input type="text" id="input-ccCvc" class="input-field" placeholder="123"></div>
+                        </div>
+                        <div><label class="label-text">Name on Card</label><input type="text" id="input-ccName" class="input-field"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="p-6 border-t border-gray-200 bg-gray-50 z-20">
+            <button id="btn-export" disabled class="w-full flex items-center justify-center gap-2 bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-md hover:shadow-lg transition-all active:scale-[0.98]">
+                <i data-lucide="download" class="w-4 h-4"></i>
+                Download PDF <span class="text-blue-200 text-xs font-normal opacity-80">(Alt+Enter)</span>
+            </button>
+        </div>
+    </aside>
+
+    <!-- RIGHT PANEL (Preview & Tools) -->
+    <main class="flex-1 bg-gray-200 relative flex flex-col min-w-0">
+        <!-- Toolbar (High Z-Index to stay on top) -->
+        <div class="h-16 bg-white border-b border-gray-200 flex items-center justify-between px-6 shadow-sm z-40 relative">
+            <div class="flex items-center gap-4">
+                <!-- Upload Zone -->
+                <div id="upload-zone" class="hidden">
+                    <label class="flex items-center gap-2 px-4 py-2 bg-blue-50 text-blue-700 rounded-lg border border-blue-200 hover:bg-blue-100 cursor-pointer text-sm font-medium transition-colors">
+                        <i data-lucide="upload" class="w-4 h-4"></i>
+                        <span>Upload Form</span>
+                        <input type="file" id="file-upload" accept="application/pdf" class="hidden">
+                    </label>
+                </div>
+                <!-- Active File Info -->
+                <div id="file-info" class="hidden flex items-center gap-3">
+                    <span class="text-sm text-gray-500 font-medium bg-gray-100 px-3 py-1 rounded-full flex items-center gap-2">
+                        <i data-lucide="file-check" class="w-4 h-4 text-green-600"></i>
+                        <span>Template Active</span>
+                    </span>
+                    <button id="btn-replace-pdf" class="text-xs text-gray-400 hover:text-red-500 underline">Change PDF</button>
+                </div>
+            </div>
+
+            <!-- Controls -->
+            <div id="controls-area" class="hidden flex items-center gap-2 bg-gray-100 p-1 rounded-lg">
+                <button id="btn-lock" class="control-btn active" title="Alt+L to Toggle"><i data-lucide="lock" class="w-3 h-3"></i> Data Entry</button>
+                <button id="btn-unlock" class="control-btn" title="Alt+L to Toggle"><i data-lucide="unlock" class="w-3 h-3"></i> Setup Layout</button>
+                
+                <div class="h-4 w-px bg-gray-300 mx-1"></div>
+                
+                <!-- Fields Button with Popover Trigger -->
+                <div class="relative">
+                    <button id="btn-fields" class="control-btn hidden"><i data-lucide="list-checks" class="w-3 h-3"></i> Fields</button>
+                    <!-- Field Selection Popover -->
+                    <div id="fields-popover" class="hidden absolute top-full right-0 mt-2 w-56 bg-white rounded-xl shadow-xl border border-gray-200 z-50 p-4 max-h-[60vh] overflow-y-auto popover-content">
+                        <h4 class="text-xs font-bold text-gray-900 uppercase border-b pb-2 mb-3 sticky top-0 bg-white">Visible Fields</h4>
+                        <div id="fields-list" class="space-y-2"></div>
+                    </div>
+                </div>
+
+                <div id="font-controls" class="hidden flex items-center gap-1 ml-1 pl-1 border-l border-gray-300">
+                    <span class="text-xs text-gray-500 font-medium">Size:</span>
+                    <button id="font-down" class="w-6 h-6 flex items-center justify-center bg-white rounded shadow-sm hover:bg-gray-50 text-gray-700">-</button>
+                    <span id="font-display" class="text-xs font-bold w-6 text-center text-gray-800">18</span>
+                    <button id="font-up" class="w-6 h-6 flex items-center justify-center bg-white rounded shadow-sm hover:bg-gray-50 text-gray-700">+</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Canvas Area -->
+        <div class="flex-1 overflow-auto p-8 flex justify-center custom-scrollbar z-0" id="main-scroll">
+            <div id="empty-state" class="flex flex-col items-center justify-center text-gray-400 mt-20">
+                <i data-lucide="file-x" class="w-12 h-12 mb-4 opacity-40"></i>
+                <h3 class="text-lg font-semibold">No Template Found</h3>
+                <p class="text-sm">Please upload a PDF form.</p>
+            </div>
+
+            <div id="pdf-container" class="relative bg-white shadow-2xl hidden transition-shadow duration-300" style="width: fit-content; height: fit-content;">
+                <canvas id="pdf-canvas" class="block pointer-events-none"></canvas>
+                <div id="overlays-layer" class="absolute inset-0 z-10"></div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // Initialize icons immediately
+        lucide.createIcons();
+
+        // AUTO-FILL FROM DASHBOARD FUNCTION
+        function autoFillFromDashboard() {
+            try {
+                // Get data from localStorage (Auto Dashboard saves after parsing DASH/MVR)
+                const dashData = JSON.parse(localStorage.getItem('dashData') || '{}');
+                
+                if (!dashData.name && !dashData.address) {
+                    alert('⚠️ No data found. Please parse DASH/MVR in Auto Dashboard first.');
+                    return;
+                }
+                
+                // Extract data
+                const fullName = dashData.name || '';
+                const fullAddress = dashData.address || '';
+                const phone = dashData.phone || '';
+                
+                // Parse address to extract city, province, postal code
+                // Expected format: "123 Main St, City, Province Postal"
+                const addressParts = fullAddress.split(',').map(p => p.trim());
+                let street = '', city = '', province = '', postalCode = '';
+                
+                if (addressParts.length > 0) {
+                    street = addressParts[0] || '';
+                }
+                if (addressParts.length >= 2) {
+                    city = addressParts[1] || '';
+                }
+                if (addressParts.length >= 3) {
+                    const provpostal = addressParts[2].split(' ');
+                    province = provpostal[0] || '';
+                    postalCode = provpostal.slice(1).join(' ') || '';
+                }
+                
+                // Fill form fields
+                document.getElementById('input-firstName').value = fullName;
+                document.getElementById('input-address').value = street;
+                document.getElementById('input-city').value = city;
+                document.getElementById('input-province').value = province;
+                document.getElementById('input-postalCode').value = postalCode;
+                document.getElementById('input-date').value = new Date().toISOString().split('T')[0];
+                
+                // Trigger render update
+                renderOverlays();
+                
+                alert('✓ Auto-filled from Dashboard (Parsed DASH/MVR data)');
+            } catch (err) {
+                console.error('Auto-fill error:', err);
+                alert('⚠️ Could not auto-fill. Please parse DASH/MVR in Auto Dashboard first.');
+            }
+        }
+
+        // --- CONSTANTS ---
+        const DB_NAME = 'BrokerPDF_V11_CopyPages'; 
+        const STORE_NAME = 'forms';
+        const FIELD_IDS = [
+            'brokerName', 'date', 'firstName', 'policyNumber', 'address', 'city', 'province', 'postalCode',
+            'bankName', 'transit', 'institution', 'account',
+            'checkMonthly', 'checkFullPay', 'checkPersonal', 'checkBusiness',
+            'ccType', 'ccNumber', 'ccExpiry', 'ccCvc', 'ccName'
+        ];
+
+        // --- STATE ---
+        const appState = {
+            company: 'aviva',
+            pdfBase64: null, 
+            layout: {},
+            visibleFields: [...FIELD_IDS],
+            fontSize: 18,
+            isLocked: true,
+            pdfPage: null,
+            scale: 1.5,
+            dragItem: null
+        };
+
+        const dom = {
+            company: document.getElementById('input-company'),
+            status: document.getElementById('template-status'),
+            uploadZone: document.getElementById('upload-zone'),
+            fileInfo: document.getElementById('file-info'),
+            emptyState: document.getElementById('empty-state'),
+            pdfContainer: document.getElementById('pdf-container'),
+            canvas: document.getElementById('pdf-canvas'),
+            overlayLayer: document.getElementById('overlays-layer'),
+            inputs: {},
+            fileInput: document.getElementById('file-upload'),
+            btnReplace: document.getElementById('btn-replace-pdf'),
+            btnExport: document.getElementById('btn-export'),
+            btnLock: document.getElementById('btn-lock'),
+            btnUnlock: document.getElementById('btn-unlock'),
+            btnFields: document.getElementById('btn-fields'),
+            fontControls: document.getElementById('font-controls'),
+            popover: document.getElementById('fields-popover'),
+            controlsArea: document.getElementById('controls-area'),
+            sidebarScroll: document.getElementById('sidebar-scroll-area')
+        };
+
+        // Initialize DOM maps
+        FIELD_IDS.forEach(id => {
+            const el = document.getElementById(id.startsWith('check') ? id : `input-${id}`);
+            if (el) dom.inputs[id] = el;
+        });
+
+        // --- TAB LOGIC ---
+        const tabBank = document.getElementById('tab-bank');
+        const tabCc = document.getElementById('tab-cc');
+        const groupBanking = document.getElementById('group-banking');
+        const groupCc = document.getElementById('group-cc');
+
+        function setPaymentMode(mode) {
+            if (mode === 'bank') {
+                groupBanking.classList.remove('hidden');
+                groupCc.classList.add('hidden');
+                tabBank.className = 'tab-btn active';
+                tabCc.className = 'tab-btn inactive';
+            } else {
+                groupBanking.classList.add('hidden');
+                groupCc.classList.remove('hidden');
+                tabCc.className = 'tab-btn active';
+                tabBank.className = 'tab-btn inactive';
+            }
+        }
+
+        tabBank.addEventListener('click', () => setPaymentMode('bank'));
+        tabCc.addEventListener('click', () => setPaymentMode('cc'));
+
+        // --- KEYBOARD SHORTCUTS ---
+        document.addEventListener('keydown', (e) => {
+            // Alt + L: Toggle Lock
+            if (e.altKey && e.code === 'KeyL') {
+                e.preventDefault();
+                setMode(!appState.isLocked);
+            }
+            // Alt + Enter: Export
+            if (e.altKey && e.key === 'Enter') {
+                e.preventDefault();
+                if (!dom.btnExport.disabled) dom.btnExport.click();
+            }
+            // Escape: Cancel / Lock
+            if (e.key === 'Escape') {
+                if (!appState.isLocked) setMode(true);
+                dom.popover.classList.add('hidden');
+            }
+        });
+
+        // --- DB HELPERS ---
+        const dbReq = indexedDB.open(DB_NAME, 1);
+        let db = null;
+
+        dbReq.onupgradeneeded = (e) => {
+            db = e.target.result;
+            if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME);
+        };
+        dbReq.onsuccess = (e) => {
+            db = e.target.result;
+            loadCompany(appState.company);
+        };
+        dbReq.onerror = (e) => console.error("DB Error", e);
+
+        function saveToDB(key, data) {
+            if (!db) return;
+            const tx = db.transaction(STORE_NAME, 'readwrite');
+            tx.objectStore(STORE_NAME).put(data, key);
+        }
+
+        async function loadFromDB(key) {
+            if (!db) return null;
+            return new Promise(resolve => {
+                const tx = db.transaction(STORE_NAME, 'readonly');
+                const req = tx.objectStore(STORE_NAME).get(key);
+                req.onsuccess = () => resolve(req.result);
+                req.onerror = () => resolve(null);
+            });
+        }
+
+        // --- LOGIC ---
+
+        async function loadCompany(companyId) {
+            appState.company = companyId;
+            dom.pdfContainer.classList.add('hidden');
+            dom.controlsArea.classList.add('hidden');
+            dom.emptyState.classList.add('hidden');
+            dom.uploadZone.classList.add('hidden');
+            dom.fileInfo.classList.add('hidden');
+            dom.btnExport.disabled = true;
+            dom.status.innerHTML = `<i data-lucide="loader" class="animate-spin w-3 h-3 inline"></i> Loading...`;
+            lucide.createIcons();
+
+            const record = await loadFromDB(companyId);
+
+            if (record && record.pdfBase64) {
+                appState.pdfBase64 = record.pdfBase64;
+                appState.layout = record.layout || {};
+                appState.visibleFields = record.visibleFields || [...FIELD_IDS];
+                appState.fontSize = record.fontSize || 18;
+                
+                document.getElementById('font-display').textContent = appState.fontSize;
+                renderPDF(appState.pdfBase64);
+                
+                dom.status.innerHTML = `<span class="text-green-600 font-bold">● Ready</span>`;
+                dom.fileInfo.classList.remove('hidden');
+                dom.controlsArea.classList.remove('hidden');
+                dom.btnExport.disabled = false;
+                setMode(true);
+            } else {
+                dom.emptyState.classList.remove('hidden');
+                dom.uploadZone.classList.remove('hidden');
+                dom.status.innerHTML = `<span class="text-red-500">● Setup Required</span>`;
+            }
+        }
+
+        dom.fileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = async function(evt) {
+                const base64 = evt.target.result;
+                appState.pdfBase64 = base64;
+                const defaultLayout = {};
+                FIELD_IDS.forEach((id, idx) => defaultLayout[id] = { x: 50, y: 100 + (idx * 30) });
+                appState.layout = defaultLayout;
+                appState.visibleFields = [...FIELD_IDS];
+                
+                saveToDB(appState.company, {
+                    pdfBase64: base64,
+                    layout: appState.layout,
+                    visibleFields: appState.visibleFields,
+                    fontSize: 18
+                });
+                
+                loadCompany(appState.company);
+            };
+            reader.readAsDataURL(file);
+        });
+
+        async function renderPDF(base64Data) {
+            pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+            const loadingTask = pdfjsLib.getDocument(base64Data);
+            const pdf = await loadingTask.promise;
+            appState.pdfPage = await pdf.getPage(1);
+            
+            const viewport = appState.pdfPage.getViewport({ scale: appState.scale });
+            dom.canvas.height = viewport.height;
+            dom.canvas.width = viewport.width;
+            
+            await appState.pdfPage.render({
+                canvasContext: dom.canvas.getContext('2d'),
+                viewport: viewport
+            }).promise;
+
+            dom.pdfContainer.classList.remove('hidden');
+            renderOverlays();
+        }
+
+        function renderOverlays() {
+            dom.overlayLayer.innerHTML = '';
+            appState.visibleFields.forEach(id => {
+                const inputEl = dom.inputs[id];
+                if (!inputEl) return;
+
+                let val = "";
+                let isCheck = false;
+                if (inputEl.type === 'checkbox') {
+                    isCheck = true;
+                    val = inputEl.checked ? "✓" : "";
+                } else {
+                    val = inputEl.value;
+                }
+
+                const shouldShow = val || !appState.isLocked;
+                if (!shouldShow) return;
+
+                const pos = appState.layout[id] || { x: 50, y: 50 };
+                const el = document.createElement('div');
+                
+                // Use Monospace font for typewriter look
+                el.style.fontFamily = "'Courier New', Courier, monospace";
+                
+                el.className = `absolute flex items-center select-none ${appState.isLocked ? 'cursor-default' : 'cursor-grab hover:bg-blue-100/50 border border-transparent hover:border-blue-400 rounded'}`;
+                el.style.left = `${pos.x}px`;
+                el.style.top = `${pos.y}px`;
+                el.style.fontSize = `${appState.fontSize}px`;
+                el.dataset.id = id;
+
+                if (isCheck) {
+                    el.classList.add('font-bold', 'text-gray-900');
+                    el.innerText = val || (appState.isLocked ? '' : `[${id}]`);
+                } else {
+                    el.classList.add('text-gray-900', 'whitespace-nowrap');
+                    el.innerText = val || (appState.isLocked ? '' : `[${id.toUpperCase()}]`);
+                }
+                
+                if(!appState.isLocked) {
+                    el.style.fontSize = '12px';
+                    el.classList.add('text-blue-700', 'bg-blue-50', 'px-1', 'font-bold');
+                    // Reset font for labels in setup mode
+                    el.style.fontFamily = 'sans-serif';
+                }
+                dom.overlayLayer.appendChild(el);
+            });
+        }
+
+        // --- EXPORT LOGIC ---
+        dom.btnExport.addEventListener('click', async () => {
+            if (!appState.pdfBase64) return;
+
+            try {
+                const base64Clean = appState.pdfBase64.split(',')[1];
+                const binaryString = window.atob(base64Clean);
+                const len = binaryString.length;
+                const bytes = new Uint8Array(len);
+                for (let i = 0; i < len; i++) {
+                    bytes[i] = binaryString.charCodeAt(i);
+                }
+
+                const { PDFDocument, rgb, StandardFonts } = window.PDFLib;
+                const sourceDoc = await PDFDocument.load(bytes, { ignoreEncryption: true });
+                const newDoc = await PDFDocument.create();
+                const [copiedPage] = await newDoc.copyPages(sourceDoc, [0]);
+                const page = newDoc.addPage(copiedPage);
+                const { width, height } = page.getSize();
+                
+                // Use Courier for the export to match typewriter style
+                const font = await newDoc.embedFont(StandardFonts.Courier);
+
+                const viewport = appState.pdfPage.getViewport({ scale: appState.scale });
+                const ratioX = width / viewport.width;
+                const ratioY = height / viewport.height;
+
+                appState.visibleFields.forEach(id => {
+                    const inputEl = dom.inputs[id];
+                    if (!inputEl) return;
+
+                    let text = "";
+                    if (inputEl.type === 'checkbox') {
+                        text = inputEl.checked ? "X" : ""; 
+                    } else {
+                        text = inputEl.value;
+                    }
+
+                    if (text && text.trim() !== "") {
+                        const pos = appState.layout[id];
+                        if (pos) {
+                            const pdfX = Number(pos.x) * ratioX;
+                            const pdfY = height - (Number(pos.y) * ratioY) - (Number(appState.fontSize) * 0.7); 
+
+                            if (!isNaN(pdfX) && !isNaN(pdfY)) {
+                                page.drawText(String(text), {
+                                    x: pdfX,
+                                    y: pdfY,
+                                    size: Number(appState.fontSize),
+                                    font: font,
+                                    color: rgb(0, 0, 0),
+                                });
+                            }
+                        }
+                    }
+                });
+
+                const pdfBytes = await newDoc.save();
+                const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(blob);
+                link.download = `${appState.company}_Filled.pdf`;
+                link.click();
+
+            } catch (err) {
+                alert("Export Error: " + err.message);
+                console.error(err);
+            }
+        });
+
+        // --- HANDLERS ---
+        let isDragging = false;
+        
+        window.addEventListener('mousedown', (e) => {
+            if (appState.isLocked) return;
+            const target = e.target.closest('[data-id]');
+            if (target) {
+                e.preventDefault();
+                isDragging = true;
+                appState.dragItem = target.dataset.id;
+            }
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            const rect = dom.pdfContainer.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            
+            if (!appState.layout[appState.dragItem]) appState.layout[appState.dragItem] = {};
+            appState.layout[appState.dragItem].x = x;
+            appState.layout[appState.dragItem].y = y;
+
+            const el = document.querySelector(`[data-id="${appState.dragItem}"]`);
+            if (el) {
+                el.style.left = `${x}px`;
+                el.style.top = `${y}px`;
+            }
+        });
+
+        window.addEventListener('mouseup', () => {
+            if (isDragging) {
+                isDragging = false;
+                saveToDB(appState.company, {
+                    pdfBase64: appState.pdfBase64,
+                    layout: appState.layout,
+                    visibleFields: appState.visibleFields,
+                    fontSize: appState.fontSize
+                });
+            }
+        });
+
+        dom.company.addEventListener('change', (e) => loadCompany(e.target.value));
+        
+        dom.btnReplace.addEventListener('click', () => {
+            if(confirm("Change PDF? Layout will reset.")) dom.fileInput.click();
+        });
+
+        document.getElementById('btn-today').addEventListener('click', () => {
+            dom.inputs.date.value = new Date().toISOString().split('T')[0];
+            renderOverlays();
+        });
+
+        Object.values(dom.inputs).forEach(el => {
+            el.addEventListener('input', renderOverlays);
+            el.addEventListener('change', renderOverlays);
+        });
+
+        function setMode(locked) {
+            appState.isLocked = locked;
+            
+            // Focus Mode Logic
+            if (locked) {
+                dom.btnLock.classList.add('active');
+                dom.btnUnlock.classList.remove('active');
+                dom.btnFields.classList.add('hidden');
+                dom.fontControls.classList.add('hidden');
+                dom.popover.classList.add('hidden');
+                
+                // Styles
+                dom.sidebarScroll.classList.remove('focus-dimmed');
+                dom.pdfContainer.classList.remove('canvas-highlight');
+            } else {
+                dom.btnLock.classList.remove('active');
+                dom.btnUnlock.classList.add('active');
+                dom.btnFields.classList.remove('hidden');
+                dom.fontControls.classList.remove('hidden');
+                
+                // Styles
+                dom.sidebarScroll.classList.add('focus-dimmed');
+                dom.pdfContainer.classList.add('canvas-highlight');
+            }
+            renderOverlays();
+        }
+
+        dom.btnLock.addEventListener('click', () => setMode(true));
+        dom.btnUnlock.addEventListener('click', () => setMode(false));
+
+        const updateFont = (delta) => {
+            appState.fontSize = Math.max(8, appState.fontSize + delta);
+            document.getElementById('font-display').textContent = appState.fontSize;
+            renderOverlays();
+            saveToDB(appState.company, {
+                pdfBase64: appState.pdfBase64,
+                layout: appState.layout,
+                visibleFields: appState.visibleFields,
+                fontSize: appState.fontSize
+            });
+        };
+        document.getElementById('font-up').addEventListener('click', () => updateFont(1));
+        document.getElementById('font-down').addEventListener('click', () => updateFont(-1));
+
+        dom.btnFields.addEventListener('click', (e) => {
+            e.stopPropagation();
+            dom.popover.classList.toggle('hidden');
+            const list = document.getElementById('fields-list');
+            list.innerHTML = '';
+            
+            FIELD_IDS.forEach(id => {
+                const div = document.createElement('label');
+                div.className = 'flex items-center gap-2 text-xs p-1 hover:bg-gray-50 cursor-pointer';
+                div.innerHTML = `<input type="checkbox" ${appState.visibleFields.includes(id) ? 'checked' : ''}> <span>${id}</span>`;
+                div.querySelector('input').addEventListener('change', (e) => {
+                    if (e.target.checked) appState.visibleFields.push(id);
+                    else appState.visibleFields = appState.visibleFields.filter(f => f !== id);
+                    renderOverlays();
+                    saveToDB(appState.company, {
+                        pdfBase64: appState.pdfBase64,
+                        layout: appState.layout,
+                        visibleFields: appState.visibleFields,
+                        fontSize: appState.fontSize
+                    });
+                });
+                list.appendChild(div);
+            });
+        });
+
+        window.addEventListener('click', (e) => {
+            if (!dom.popover.contains(e.target) && e.target !== dom.btnFields) {
+                dom.popover.classList.add('hidden');
+            }
+        });
+
+    </script>
+</body>
+</html>

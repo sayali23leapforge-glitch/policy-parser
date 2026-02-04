@@ -716,6 +716,133 @@ def extract_dash_fields(text):
     return data
 
 
+def parse_quote_pdf(pdf_file):
+    """
+    Parse Auto Quote PDF and extract policy, vehicle, and coverage information
+
+    Args:
+        pdf_file: File object or bytes of the PDF
+
+    Returns:
+        dict: Extracted quote information
+    """
+    try:
+        if isinstance(pdf_file, bytes):
+            pdf_file = BytesIO(pdf_file)
+
+        pdf_reader = PyPDF2.PdfReader(pdf_file)
+
+        full_text = ""
+        for page in pdf_reader.pages:
+            full_text += (page.extract_text() or "") + "\n"
+
+        quote_data = extract_quote_fields(full_text)
+
+        return {
+            "success": True,
+            "data": quote_data,
+            "raw_text": full_text
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
+
+
+def extract_quote_fields(text):
+    """
+    Extract key fields from Auto Quote PDF text
+    """
+    data = {}
+    normalized = re.sub(r"\s+", " ", text).strip()
+
+    # Effective Date (handles spacing within letters from PDF extraction)
+    effective_match = re.search(
+        r"E\s*f\s*f\s*e\s*c\s*t\s*i\s*v\s*e\s*D\s*a\s*t\s*e\s*:\s*([0-9]{1,2}/[0-9]{1,2}/[0-9]{2,4})",
+        text,
+        re.IGNORECASE
+    )
+    if effective_match:
+        data["effective_date"] = normalize_date(effective_match.group(1))
+
+    # Insurance Company (fix broken 'Company' word)
+    company_match = re.search(
+        r"([A-Z][A-Za-z&\s]+\s+Insurance\s+C\s*o\s*m\s*p\s*a\s*n\s*y|[A-Z][A-Za-z&\s]+\s+Insurance\s+Inc\.?|[A-Z][A-Za-z&\s]+\s+Insurance)\b",
+        text,
+        re.IGNORECASE
+    )
+    if company_match:
+        company = company_match.group(1)
+        company = re.sub(r"\s+", " ", company).strip()
+        company = re.sub(r"Comp\s*any", "Company", company, flags=re.IGNORECASE)
+        data["insurance_company"] = company
+
+    # Policy Holder (after 'Breakdown')
+    holder_match = re.search(r"Breakdown\s*([A-Z][A-Z\s]+)", text)
+    if holder_match:
+        policy_holder = re.sub(r"\s+", " ", holder_match.group(1)).strip()
+        data["policy_holder"] = policy_holder
+
+    # Vehicle year/make/model
+    vehicle_match = re.search(
+        r"Private\s*P\s*assenger\s*-\s*(\d{4}\s+[A-Z0-9\s]+?)\s+\$",
+        text,
+        re.IGNORECASE
+    )
+    if vehicle_match:
+        data["vehicle_year_make_model"] = re.sub(r"\s+", " ", vehicle_match.group(1)).strip()
+
+    # Coverages and limits
+    bi_match = re.search(r"Bodily\s*Injury\s*\$?([0-9,]+)", normalized, re.IGNORECASE)
+    pd_match = re.search(r"Property\s*Damage\s*\$?([0-9,]+)", normalized, re.IGNORECASE)
+    dc_match = re.search(r"Direct\s*Compensation\s*\$?([0-9,]+)\s*Ded\.?\s*\$?([0-9,]+)", normalized, re.IGNORECASE)
+    # All Perils - handle non-breaking spaces and format: "All Perils $1,000 Ded. $493"
+    all_perils_match = re.search(r"All\s+Perils[\s\xa0]*\$?[0-9,]+[\s\xa0]*Ded\.?[\s\xa0]*\$?([0-9,]+)", normalized, re.IGNORECASE)
+    loss_use_match = re.search(r"#?20\s*L\s*o\s*s\s*s\s*of\s*U\s*s\s*e\s*\$?([0-9,]+)", normalized, re.IGNORECASE)
+    fam_prot_match = re.search(r"#\s*44[^$]*\$?([0-9,]+)", normalized, re.IGNORECASE)
+    if not fam_prot_match:
+        fam_prot_match = re.search(
+            r"F\s*a\s*m\s*i\s*l\s*y\s*P\s*r\s*o\s*t\s*e\s*c\s*t\s*i\s*o\s*n\s*\$?([0-9,]+)",
+            normalized,
+            re.IGNORECASE
+        )
+    non_owned_match = re.search(r"#\s*27[^$]*\$?([0-9,]+)", normalized, re.IGNORECASE)
+    if not non_owned_match:
+        non_owned_match = re.search(
+            r"N\s*o\s*n\s*-?\s*O\s*w\s*n\s*e\s*d\s*A\s*u\s*t\s*o\s*\$?([0-9,]+)",
+            normalized,
+            re.IGNORECASE
+        )
+
+    if bi_match:
+        data["bodily_injury_limit"] = f"${bi_match.group(1)}"
+    if pd_match:
+        data["property_damage_limit"] = f"${pd_match.group(1)}"
+    if data.get("bodily_injury_limit") or data.get("property_damage_limit"):
+        bi_val = data.get("bodily_injury_limit", "-")
+        pd_val = data.get("property_damage_limit", "-")
+        data["bodily_injury_property_damage"] = f"{bi_val} / {pd_val}"
+
+    if dc_match:
+        data["direct_comp_limit"] = f"${dc_match.group(1)}"
+        data["direct_comp_deductible"] = f"${dc_match.group(2)}"
+
+    if all_perils_match:
+        data["all_perils_deductible"] = f"${all_perils_match.group(1)}"
+
+    if loss_use_match:
+        data["loss_of_use_limit"] = f"${loss_use_match.group(1)}"
+
+    if fam_prot_match:
+        data["family_protection_limit"] = f"${fam_prot_match.group(1)}"
+
+    if non_owned_match:
+        data["non_owned_auto_limit"] = f"${non_owned_match.group(1)}"
+
+    return data
+
+
 def parse_mvr_pdf(pdf_file):
     """
     Parse MVR PDF and extract driver information

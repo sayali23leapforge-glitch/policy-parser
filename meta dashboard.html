@@ -18,6 +18,9 @@
     <script src="https://apis.google.com/js/api.js"></script>
     <script src="https://accounts.google.com/gsi/client"></script>
     
+    <!-- Socket.IO for real-time WebSocket communication -->
+    <script src="https://cdn.socket.io/4.5.4/socket.io.min.js"></script>
+    
     <!-- Supabase -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     
@@ -607,30 +610,177 @@
                 this.initDatePickers(); // Init global pickers like view date
                 this.setupDateShortcuts(); // Init date shortcuts
 
-                // Load all leads (manual and Facebook) from database
-                console.log('📞 Loading leads from database (instant)...');
-                await this.loadLeadsFromDatabase();
-                this.sortLeadsByDate();
+                // IMPORTANT: Load existing leads on STARTUP ONLY
+                // Facebook leads load from Meta API; manual leads load from database
+                // After this, NEW leads ONLY come from WebSocket webhook push
+                console.log('📞 Loading existing leads (Facebook + manual) on startup...');
+                await this.loadExistingLeadsFromDatabase();
                 this.renderAll();
                 this.updateStats();
-                this.startAutoRefresh(); // Then every 30 seconds
+                
+                // Connect to WebSocket for REAL-TIME lead push from webhook
+                this.startAutoRefresh(); // Setup WebSocket listener for new leads
                 console.log('✅ Dashboard init() completed');
             }
             sortLeadsByDate() {
                 this.state.leads.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
             }
 
-            startAutoRefresh() {
-                // Sync fresh leads from Facebook every 30 seconds
-                setInterval(async () => {
-                    console.log('🔄 Auto-syncing from Facebook...');
-                    await this.syncFromFacebook();
-                }, 30000); // 30 seconds
+            getStoredManualLeads() {
+                try {
+                    const raw = localStorage.getItem('manual_leads');
+                    const parsed = raw ? JSON.parse(raw) : [];
+                    if (!Array.isArray(parsed)) return [];
+                    return parsed.filter(l => l && (l.is_manual || l.isManual));
+                } catch (error) {
+                    console.warn('⚠️ Failed to read manual leads from storage:', error);
+                    return [];
+                }
             }
+
+            saveStoredManualLeads(leads) {
+                try {
+                    localStorage.setItem('manual_leads', JSON.stringify(leads || []));
+                } catch (error) {
+                    console.warn('⚠️ Failed to save manual leads to storage:', error);
+                }
+            }
+
+            upsertStoredManualLead(lead) {
+                if (!lead) return;
+                const manualLeads = this.getStoredManualLeads();
+                const index = manualLeads.findIndex(l => l.id === lead.id);
+                if (index >= 0) {
+                    manualLeads[index] = lead;
+                } else {
+                    manualLeads.unshift(lead);
+                }
+                this.saveStoredManualLeads(manualLeads);
+            }
+
+            removeStoredManualLead(leadId) {
+                if (!leadId) return;
+                const manualLeads = this.getStoredManualLeads();
+                const filtered = manualLeads.filter(l => l.id !== leadId);
+                this.saveStoredManualLeads(filtered);
+            }
+
+            getPersistedLeads() {
+                try {
+                    const raw = sessionStorage.getItem('current_leads');
+                    const parsed = raw ? JSON.parse(raw) : [];
+                    if (!Array.isArray(parsed)) return [];
+                    return parsed;
+                } catch (error) {
+                    console.warn('⚠️ Failed to read persisted leads:', error);
+                    return [];
+                }
+            }
+
+            savePersistedLeads(leads) {
+                try {
+                    sessionStorage.setItem('current_leads', JSON.stringify(leads || []));
+                } catch (error) {
+                    console.warn('⚠️ Failed to save persisted leads:', error);
+                }
+            }
+
+            startAutoRefresh() {
+                // REAL-TIME WEBHOOK PUSH ARCHITECTURE
+                // - Dashboard connects to WebSocket
+                // - Webhook pushes new leads directly to dashboard
+                // - Dashboard ONLY displays leads from WebSocket (never from database)
+                // - Database is write-only storage
+                
+                console.log('🔗 Connecting to real-time WebSocket server...');
+                this.setupWebSocketListener();
+            }
+
+            setupWebSocketListener() {
+                // Connect to WebSocket for real-time lead updates
+                // This is the ONLY source of leads for display
+                try {
+                    // Connect to the WebSocket server
+                    this.socket = io(BACKEND_URL, {
+                        reconnection: true,
+                        reconnectionDelay: 1000,
+                        reconnectionDelayMax: 5000,
+                        reconnectionAttempts: 5
+                    });
+
+                    // Handle connection
+                    this.socket.on('connect', () => {
+                        console.log('✅ WebSocket connected to real-time server');
+                        // Join dashboard room to receive live lead updates
+                        this.socket.emit('join_dashboard');
+                    });
+
+                    // Handle joining dashboard room
+                    this.socket.on('joined_dashboard', (data) => {
+                        console.log('📊 Joined dashboard room - ready to receive live leads');
+                        this.showToast('Connected to real-time lead updates', 'success');
+                    });
+
+                    // MAIN: Receive new leads from webhook via WebSocket
+                    this.socket.on('new_lead', (data) => {
+                        const lead = data.lead;
+                        const source = data.source || 'unknown';
+                        
+                        console.log(`⚡ RECEIVED LIVE LEAD from ${source}: ${lead.name}`);
+                        
+                        // Ensure lead is marked as from Facebook if from webhook
+                        if (source === 'webhook' && !lead.is_manual) {
+                            lead.source = 'facebook_webhook';
+                        }
+                        
+                        // ADD TO DASHBOARD AT TOP (this is the ONLY way leads appear)
+                        // Use unshift() to prepend - NEW lead goes to index 0
+                        // All existing leads (manual and Facebook) shift down naturally
+                        this.state.leads.unshift(lead);
+                        
+                        // PERSIST immediately after new lead
+                        this.savePersistedLeads(this.state.leads);
+                        
+                        this.renderAll();
+                        this.updateStats();
+                        
+                        // Notify user of new lead
+                        this.showToast(`🎉 New lead received: ${lead.name}`, 'success');
+                    });
+
+                    // Handle connection response
+                    this.socket.on('connection_response', (data) => {
+                        console.log('📡 Server response:', data.data);
+                    });
+
+                    // Handle disconnection
+                    this.socket.on('disconnect', () => {
+                        console.log('⚠️  WebSocket disconnected - will attempt to reconnect');
+                        this.showToast('Disconnected from real-time updates', 'warning');
+                    });
+
+                    // Handle errors
+                    this.socket.on('error', (error) => {
+                        console.error('❌ WebSocket error:', error);
+                        this.showToast('Connection error: ' + error, 'error');
+                    });
+
+                    console.log('✅ WebSocket listener setup complete');
+                } catch (error) {
+                    console.error('❌ Failed to setup WebSocket listener:', error);
+                    this.showToast('Failed to setup real-time connection', 'error');
+                }
+            }
+
+            // REMOVED: setupWebhookListener() - no longer needed
+            // REMOVED: 3-second polling - no longer needed
+            // REMOVED: 60-second fallback polling - no longer needed
+            // REMOVED: loadLeadsFromDatabase() for display - database is write-only
+
 
             async syncFromFacebook() {
                 try {
-                    console.log('📞 Calling Facebook sync endpoint...');
+                    console.log('📞 Calling Facebook sync endpoint (manual)...');
                     const response = await fetch(`${BACKEND_URL}/api/leads/sync`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' }
@@ -652,37 +802,76 @@
                 }
             }
 
-            async loadLeadsFromDatabase() {
-                // Load existing leads from database (instant)
-                console.log('🔍 Fetching from:', `${BACKEND_URL}/api/leads`);
+            async loadExistingLeadsFromDatabase() {
+                // Load Facebook leads from Leads Center API + Manual leads from database
+                // New leads after this come ONLY from WebSocket webhook push
+                console.log('📱 Loading leads on startup...');
                 
                 try {
-                    const response = await fetch(`${BACKEND_URL}/api/leads`, {
-                        method: 'GET',
-                        headers: { 'Content-Type': 'application/json' }
-                    });
+                    const [facebookResponse, manualResponse] = await Promise.all([
+                        fetch(`${BACKEND_URL}/api/leads/from-facebook`, {
+                            method: 'GET',
+                            headers: { 'Content-Type': 'application/json' }
+                        }),
+                        fetch(`${BACKEND_URL}/api/leads/manual`, {
+                            method: 'GET',
+                            headers: { 'Content-Type': 'application/json' }
+                        })
+                    ]);
                     
-                    console.log('📡 Response received! Status:', response.status);
-                    
-                    if (!response.ok) {
-                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    if (!facebookResponse.ok) {
+                        throw new Error(`HTTP ${facebookResponse.status}: ${facebookResponse.statusText}`);
                     }
                     
-                    const result = await response.json();
-                    console.log('📦 Loaded from database:', result.count, 'leads');
+                    const facebookResult = await facebookResponse.json();
+                    const manualResult = manualResponse.ok ? await manualResponse.json() : { success: false, data: [] };
                     
-                    this.state.leads = result.data || [];
+                    const facebookLeads = facebookResult.success ? (facebookResult.data || []) : [];
+                    
+                    // Get manual leads from database, fall back to localStorage if database fails
+                    let manualLeads = manualResult.success ? (manualResult.data || []) : [];
+                    if (!manualLeads.length) {
+                        console.log('⚠️ No manual leads from database, checking localStorage...');
+                        manualLeads = this.getStoredManualLeads();
+                    }
+                    
+                    console.log('📋 Loaded from Facebook Leads Center:', facebookLeads.length, 'leads');
+                    console.log('✍️ Loaded manual leads from database:', manualLeads.length, 'leads');
+                    
+                    // Merge and sort by date (newest first)
+                    this.state.leads = [...manualLeads, ...facebookLeads].sort((a, b) => 
+                        new Date(b.created_at || 0) - new Date(a.created_at || 0)
+                    );
+                    
+                    // Persist to session for navigation
+                    this.savePersistedLeads(this.state.leads);
+                    
+                    // Sync manual leads to localStorage for backup
+                    manualLeads.forEach(lead => this.upsertStoredManualLead(lead));
+                    
+                    console.log(`✅ Total leads: ${this.state.leads.length} (${manualLeads.length} manual + ${facebookLeads.length} Facebook)`);
                     this.state.loading = false;
-                    
-                    console.log('✅ Database load complete:', this.state.leads.length, 'leads');
                 } catch (error) {
-                    console.error('❌ Error loading from database:', error);
+                    console.error('❌ Error loading leads on startup:', error);
                     this.state.loading = false;
+                    // Fall back to localStorage manual leads
+                    const manualLeads = this.getStoredManualLeads();
+                    this.state.leads = manualLeads;
+                    console.log('⚠️ Using fallback manual leads from localStorage:', manualLeads.length);
                 }
             }
 
+            async loadLeadsFromDatabase() {
+                // ❌ NO LONGER USED - KEPT FOR REFERENCE ONLY
+                // Dashboard displays leads ONLY from WebSocket (webhook push)
+                // This function should never be called after init
+                console.warn('⚠️  loadLeadsFromDatabase() called - but dashboard uses WebSocket only');
+                return [];
+            }
+
             async syncLeadsWithMeta() {
-                // Sync latest leads from Meta API
+                // Manual sync button for testing/backup
+                // Syncs data but does NOT display from database (WebSocket only for display)
                 try {
                     const syncBtn = document.getElementById('sync-meta-btn');
                     const icon = syncBtn.querySelector('i');
@@ -695,7 +884,7 @@
                     });
                     const result = await response.json();
                     if (result.success) {
-                        await this.loadLeadsFromBackend();
+                        await this.loadLeadsFromDatabase();
                         this.renderAll();
                         this.updateStats();
                         this.updateLastSyncTime();
@@ -993,6 +1182,9 @@
                 const row = clone.querySelector('tr');
 
                 row.dataset.id = lead.id;
+                row.dataset.name = lead.name || '';
+                row.dataset.phone = lead.phone || '';
+                row.dataset.email = lead.email || '';
                 
                 // Identity Column
                 row.querySelector('.lead-name').textContent = lead.name;
@@ -1215,13 +1407,28 @@
                 if (target.closest('.action-process')) {
                     // Get lead data and navigate to appropriate page based on insurance type
                     const leadId = row.dataset.id;
-                    const lead = this.state.leads.find(l => l.id === leadId);
+                    const lead = this.state.leads.find(l => String(l.id) === String(leadId) || String(l.lead_id) === String(leadId));
+                    const rowName = row.dataset.name || '';
+                    const rowPhone = row.dataset.phone || '';
+                    const rowEmail = row.dataset.email || '';
                     if (lead) {
                         const params = new URLSearchParams({
-                            name: lead.name || '',
-                            phone: lead.phone || '',
-                            email: lead.email || ''
+                            name: rowName,
+                            phone: rowPhone,
+                            email: rowEmail
                         });
+
+                        // Persist clicked lead for Auto Dashboard fallback (in case URL params are lost)
+                        try {
+                            localStorage.setItem('autoDashboardLeadFromMeta', JSON.stringify({
+                                name: rowName,
+                                phone: rowPhone,
+                                email: rowEmail,
+                                leadId: lead.id || lead.lead_id || ''
+                            }));
+                        } catch (e) {
+                            console.warn('⚠️ Could not store lead for Auto Dashboard fallback', e);
+                        }
                         
                         // Determine which page to navigate to based on insurance type
                         let destinationPage = 'Auto dashboard.html'; // Default to Auto
@@ -1237,7 +1444,25 @@
                         
                         window.location.href = `${destinationPage}?${params.toString()}`;
                     } else {
-                        window.location.href = 'Auto dashboard.html';
+                        const rowName = row.dataset.name || '';
+                        const rowPhone = row.dataset.phone || '';
+                        const rowEmail = row.dataset.email || '';
+                        const params = new URLSearchParams({
+                            name: rowName,
+                            phone: rowPhone,
+                            email: rowEmail
+                        });
+                        try {
+                            localStorage.setItem('autoDashboardLeadFromMeta', JSON.stringify({
+                                name: rowName,
+                                phone: rowPhone,
+                                email: rowEmail,
+                                leadId: row.dataset.id || ''
+                            }));
+                        } catch (e) {
+                            console.warn('⚠️ Could not store fallback lead for Auto Dashboard', e);
+                        }
+                        window.location.href = `Auto dashboard.html?${params.toString()}`;
                     }
                 } else if (target.closest('.action-edit')) {
                     this.openEditModal(row.dataset.id);
@@ -1304,11 +1529,17 @@
                     .then(res => res.json())
                     .then(result => {
                         this.state.selectedIds.delete(id);
-                        this.loadLeadsFromDatabase().then(() => {
-                            this.renderAll();
-                            this.updateStats();
-                            this.showToast('Lead deleted successfully', 'success');
-                        });
+                        // Remove from localStorage if it's a manual lead
+                        this.removeStoredManualLead(id);
+                        // Remove from state
+                        this.state.leads = this.state.leads.filter(l => l.id !== id);
+                        
+                        // PERSIST after delete
+                        this.savePersistedLeads(this.state.leads);
+                        
+                        this.renderAll();
+                        this.updateStats();
+                        this.showToast('Lead deleted successfully', 'success');
                     })
                     .catch(error => {
                         console.error('Error:', error);
@@ -1485,11 +1716,18 @@
                     .then(res => res.json())
                     .then(result => {
                         this.showToast(`Lead updated successfully`, 'success');
+                        // Update in state
+                        const index = this.state.leads.findIndex(l => l.id === id);
+                        if (index >= 0) {
+                            this.state.leads[index] = { ...this.state.leads[index], ...leadData };
+                            this.upsertStoredManualLead(this.state.leads[index]);
+                        }
+                        // PERSIST after update
+                        this.savePersistedLeads(this.state.leads);
+                        
                         this.closeModal();
-                        this.loadLeadsFromDatabase().then(() => {
-                            this.renderAll();
-                            this.updateStats();
-                        });
+                        this.renderAll();
+                        this.updateStats();
                     })
                     .catch(error => {
                         console.error('Error:', error);
@@ -1509,6 +1747,11 @@
                             // Add new lead to TOP of the list
                             const newLead = result.data;
                             this.state.leads.unshift(newLead); // Add to beginning of array
+                            
+                            // PERSIST immediately after manual lead creation
+                            this.savePersistedLeads(this.state.leads);
+                            this.upsertStoredManualLead(newLead);
+                            
                             this.closeModal();
                             this.renderAll();
                             this.updateStats();

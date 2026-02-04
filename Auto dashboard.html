@@ -85,9 +85,15 @@
         <div class="bg-white h-full overflow-y-auto border-r border-slate-200 shadow-[4px_0_24px_rgba(0,0,0,0.02)] z-10 relative flex flex-col hud__sidebar">
             <div class="p-6">
                 <!-- Back Button -->
-                <div class="mb-4">
+                <div class="mb-4 flex gap-2">
                     <a href="meta dashboard.html" class="inline-flex items-center gap-2 px-3 py-2 text-xs font-bold text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all border border-slate-200 hover:border-indigo-300 shadow-sm">
                         <i class="fa-solid fa-arrow-left"></i> Back to Leads
+                    </a>
+                    <a href="PAC form.html" class="inline-flex items-center gap-2 px-3 py-2 text-xs font-bold text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all border border-slate-200 hover:border-indigo-300 shadow-sm">
+                        <i class="fa-solid fa-file-lines"></i> PAC
+                    </a>
+                    <a href="coverpage.html" class="inline-flex items-center gap-2 px-3 py-2 text-xs font-bold text-slate-600 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all border border-slate-200 hover:border-indigo-300 shadow-sm">
+                        <i class="fa-solid fa-file-contract"></i> Cover Page
                     </a>
                 </div>
                 
@@ -475,6 +481,10 @@
                 <i class="fa-solid fa-house text-base"></i>
                 <span class="text-[10px] font-bold leading-tight">Property</span>
             </button>
+            <button onclick="window.location.href='zoho signer auto.html'" class="w-full flex flex-col items-center justify-center gap-1.5 px-3 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded transition-all shadow-sm hover:shadow-md transform hover:scale-105 active:scale-95 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                <i class="fa-solid fa-signature text-base"></i>
+                <span class="text-[10px] font-bold leading-tight">Zoho Signer</span>
+            </button>
         </div>
     </div>
 
@@ -596,13 +606,41 @@
                 
                 // Check for URL parameters FIRST (from meta dashboard)
                 const urlParams = new URLSearchParams(window.location.search);
-                const hasUrlParams = urlParams.has('name') || urlParams.has('phone') || urlParams.has('email');
-                
-                const name = urlParams.get('name');
-                const phone = urlParams.get('phone');
-                const email = urlParams.get('email');
-                
+                const rawName = urlParams.get('name');
+                const rawPhone = urlParams.get('phone');
+                const rawEmail = urlParams.get('email');
+
+                let name = rawName || '';
+                let phone = rawPhone || '';
+                let email = rawEmail || '';
+
+                const hasUrlParams = !!(name || phone || email);
+
                 console.log('🔗 URL params:', { name, phone, email });
+
+                // Fallback: if URL params are empty, use the last lead clicked in Meta Dashboard
+                if (!hasUrlParams) {
+                    try {
+                        const metaLeadRaw = localStorage.getItem('autoDashboardLeadFromMeta');
+                        if (metaLeadRaw) {
+                            const metaLead = JSON.parse(metaLeadRaw);
+                            const metaName = metaLead?.name || '';
+                            const metaPhone = metaLead?.phone || '';
+                            const metaEmail = metaLead?.email || '';
+
+                            if (metaName || metaPhone || metaEmail) {
+                                console.log('🧭 Using Meta Dashboard fallback lead:', metaLead);
+                                name = metaName;
+                                phone = metaPhone;
+                                email = metaEmail;
+                                // Clear the fallback so it doesn't override future sessions
+                                localStorage.removeItem('autoDashboardLeadFromMeta');
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('⚠️ Failed to read Meta Dashboard fallback lead', e);
+                    }
+                }
                 
                 // If email is provided, try to load saved data from backend
                 if (email) {
@@ -611,8 +649,8 @@
                     return; // loadSavedData will handle initialization
                 }
                 
-                // If no URL params, try to restore from localStorage
-                if (!hasUrlParams) {
+                // If still no lead info, try to restore from localStorage
+                if (!(name || phone || email)) {
                     const savedData = localStorage.getItem('autoDashboardDrivers');
                     const savedOriginalLead = localStorage.getItem('autoDashboardOriginalLead');
                     if (savedData) {
@@ -639,7 +677,7 @@
 
             loadSavedData: async function(email, name, phone) {
                 try {
-                    console.log('📡 Fetching saved auto data from backend...');
+                    console.log('📡 Fetching saved auto data from backend for email:', email);
                     const response = await fetch(`${window.location.origin}/api/get-auto-data/${encodeURIComponent(email)}`);
                     
                     if (response.ok) {
@@ -652,24 +690,52 @@
                                 this.drivers = result.data.auto_data.drivers;
                                 this.currDrvIdx = 0;
                                 
+                                // **IMPORTANT**: Preserve the phone and email from the Meta Dashboard click
+                                // In case the saved data has old values
+                                if (phone) {
+                                    this.drivers[0].personalMobile = phone;
+                                    console.log('🔄 Updated phone from clicked lead:', phone);
+                                }
+                                if (email) {
+                                    this.drivers[0].personalEmail = email;
+                                    console.log('🔄 Updated email from clicked lead:', email);
+                                }
+                                
                                 // Debug: Log what was loaded
                                 console.log('📊 Loaded driver data:', this.drivers[0]);
-                                console.log('  - convictionsList:', this.drivers[0].convictionsList?.length || 0, 'items');
-                                console.log('  - allPolicies:', this.drivers[0].allPolicies?.length || 0, 'items');
-                                console.log('  - expGDate_base:', this.drivers[0].expGDate_base);
-                                console.log('  - expG2Date_base:', this.drivers[0].expG2Date_base);
-                                console.log('  - expG1Date_base:', this.drivers[0].expG1Date_base);
+                                console.log('  - Phone:', this.drivers[0].personalMobile);
+                                console.log('  - Email:', this.drivers[0].personalEmail);
                                 
                                 // Store original lead
                                 this.originalLead = {
-                                    name: name || result.data.customer?.name || '',
-                                    phone: phone || result.data.customer?.phone || '',
+                                    name: name || this.drivers[0].personalName || '',
+                                    phone: phone || this.drivers[0].personalMobile || '',
                                     email: email
                                 };
                                 
                                 console.log('✅ Restored drivers from database');
                                 this.renderSelectors();
                                 this.refreshUI();
+                                
+                                // Force set phone and email inputs
+                                setTimeout(() => {
+                                    const phoneInput = document.querySelector('[data-key="personalMobile"]');
+                                    const emailInput = document.querySelector('[data-key="personalEmail"]');
+                                    const searchInput = document.getElementById('client-search');
+                                    
+                                    if (phoneInput) {
+                                        phoneInput.value = phone || this.drivers[0].personalMobile || '';
+                                        console.log('✅ Phone input set to:', phoneInput.value);
+                                    }
+                                    if (emailInput) {
+                                        emailInput.value = email || this.drivers[0].personalEmail || '';
+                                        console.log('✅ Email input set to:', emailInput.value);
+                                    }
+                                    if (searchInput && name) {
+                                        searchInput.value = name;
+                                        console.log('✅ Search input set to:', name);
+                                    }
+                                }, 100);
                                 
                                 // Show success message
                                 const btn = document.querySelector('button[onclick="App.saveToDatabase()"]');
@@ -688,13 +754,13 @@
                         }
                     }
                     
-                    // If no saved data found or error, initialize new client
-                    console.log('ℹ️ No saved data found, initializing new client');
+                    // If no saved data found or error, initialize new client with clicked lead info
+                    console.log('ℹ️ No saved data found, initializing new client with clicked lead info');
                     this.initializeNewClient(name, phone, email);
                     
                 } catch (error) {
                     console.error('❌ Error loading saved data:', error);
-                    // Fallback to new client
+                    // Fallback to new client with clicked lead info
                     this.initializeNewClient(name, phone, email);
                 }
             },
@@ -705,7 +771,7 @@
                 this.drivers[0].mainRel = 'Principal';
                 this.currDrvIdx = 0; 
                 
-                console.log('🔗 URL string:', window.location.search);
+                console.log('🔗 Initializing new client with:', {name, phone, email});
                 
                 // Store original lead data from URL params (for restoring when search is cleared)
                 this.originalLead = {
@@ -713,133 +779,109 @@
                     phone: phone || '',
                     email: email || ''
                 };
-                console.log('💾 Stored original lead from URL params:', this.originalLead);
+                console.log('💾 Stored original lead:', this.originalLead);
                 
                 // Populate driver object with URL params BEFORE refreshUI
                 const drv = this.drivers[0];
-                console.log('📦 Driver object before URL params:', {...drv});
                 
                 if (phone) {
                     drv.personalMobile = phone;
-                    console.log('✅ Phone set in driver object:', phone);
+                    console.log('✅ Phone set in driver:', phone);
                 }
                 if (email) {
                     drv.personalEmail = email;
-                    console.log('✅ Email set in driver object:', email);
+                    console.log('✅ Email set in driver:', email);
                 }
-                // Note: mainName should be set manually by user or from PDF parsing
-                // Don't override from URL params as it interferes with MVR/DASH parsing
-                
-                console.log('📦 Driver object after URL params:', {...drv});
+                if (name) {
+                    console.log('✅ Name from URL params:', name);
+                }
                 
                 // NOW render and refresh UI with the URL param values already in driver object
                 this.renderSelectors();
-                console.log('✅ renderSelectors done');
-                
                 this.refreshUI();
-                console.log('✅ refreshUI done');
                 
-                // FORCE set input values directly as backup (phone and email only)
-                if (phone || email) {
-                    setTimeout(() => {
-                        if (phone) {
-                            const phoneInput = document.querySelector('[data-key="personalMobile"]');
-                            if (phoneInput && !phoneInput.value) {
-                                phoneInput.value = phone;
-                                console.log('🔧 FORCE set phone input:', phone);
-                            }
-                        }
-                        if (email) {
-                            const emailInput = document.querySelector('[data-key="personalEmail"]');
-                            if (emailInput && !emailInput.value) {
-                                emailInput.value = email;
-                                console.log('🔧 FORCE set email input:', email);
-                            }
-                        }
-                    }, 300);
-                }
-                
-                // Verify inputs after refreshUI
+                // FORCE SET all input values immediately after refreshUI
                 setTimeout(() => {
+                    const searchInput = document.getElementById('client-search');
                     const phoneInput = document.querySelector('[data-key="personalMobile"]');
                     const emailInput = document.querySelector('[data-key="personalEmail"]');
                     
-                    console.log('🔍 After refreshUI - Input values:');
-                    console.log('  Phone input:', phoneInput?.value, '(expected:', phone, ')');
-                    console.log('  Email input:', emailInput?.value, '(expected:', email, ')');
-                    console.log('  Name input: (empty - will be populated from DASH PDF)');
-                }, 200);
+                    console.log('🔧 FORCE SETTING inputs:');
+                    console.log('  Found elements:', {
+                        search: !!searchInput,
+                        phone: !!phoneInput,
+                        email: !!emailInput
+                    });
+                    
+                    // Set search input
+                    if (searchInput && name) {
+                        searchInput.value = name;
+                        searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+                        searchInput.dispatchEvent(new Event('change', { bubbles: true }));
+                        console.log('  ✅ Search:', name, '→ input value:', searchInput.value);
+                    } else {
+                        console.warn('  ❌ Search not set - searchInput:', !!searchInput, 'name:', name);
+                    }
+                    
+                    // Set phone input
+                    if (phoneInput && phone) {
+                        phoneInput.value = phone;
+                        phoneInput.dispatchEvent(new Event('input', { bubbles: true }));
+                        phoneInput.dispatchEvent(new Event('change', { bubbles: true }));
+                        console.log('  ✅ Phone:', phone, '→ input value:', phoneInput.value);
+                    } else {
+                        console.warn('  ❌ Phone not set - phoneInput:', !!phoneInput, 'phone:', phone);
+                    }
+                    
+                    // Set email input
+                    if (emailInput && email) {
+                        emailInput.value = email;
+                        emailInput.dispatchEvent(new Event('input', { bubbles: true }));
+                        emailInput.dispatchEvent(new Event('change', { bubbles: true }));
+                        console.log('  ✅ Email:', email, '→ input value:', emailInput.value);
+                    } else {
+                        console.warn('  ❌ Email not set - emailInput:', !!emailInput, 'email:', email);
+                    }
+                }, 50);
                 
-                // Set search field separately
-                if (name) {
-                    setTimeout(() => {
-                        const searchInput = document.getElementById('client-search');
-                        if (searchInput) {
-                            searchInput.value = name;
-                            console.log('✅ Search field set:', name);
-                        }
-                    }, 100);
-                }
+                // SECOND ATTEMPT - try again after a longer delay
+                setTimeout(() => {
+                    const searchInput = document.getElementById('client-search');
+                    const phoneInput = document.querySelector('[data-key="personalMobile"]');
+                    const emailInput = document.querySelector('[data-key="personalEmail"]');
+                    
+                    console.log('🔧 SECOND ATTEMPT - Force setting:');
+                    
+                    if (searchInput && name && !searchInput.value) {
+                        searchInput.value = name;
+                        searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+                        console.log('  ✅ Search (retry):', searchInput.value);
+                    }
+                    
+                    if (phoneInput && phone && !phoneInput.value) {
+                        phoneInput.value = phone;
+                        phoneInput.dispatchEvent(new Event('input', { bubbles: true }));
+                        console.log('  ✅ Phone (retry):', phoneInput.value);
+                    }
+                    
+                    if (emailInput && email && !emailInput.value) {
+                        emailInput.value = email;
+                        emailInput.dispatchEvent(new Event('input', { bubbles: true }));
+                        console.log('  ✅ Email (retry):', emailInput.value);
+                    }
+                }, 150);
                 
-                // FETCH SAVED DATA FROM DATABASE (if email present)
-                if (email) {
-                    console.log('🔍 Fetching saved data for email:', email);
-                    setTimeout(() => {
-                        fetch(`/api/get-client-data/${encodeURIComponent(email)}`)
-                            .then(response => {
-                                if (response.status === 200) {
-                                    return response.json();
-                                } else {
-                                    console.log('⚠️ No saved data found (404)');
-                                    return { success: false };
-                                }
-                            })
-                            .then(result => {
-                                if (result.success && result.data) {
-                                    console.log('✅ RESTORING DATA FROM DATABASE');
-                                    const savedData = result.data;
-                                    
-                                    // Restore drivers array
-                                    if (savedData.drivers && Array.isArray(savedData.drivers)) {
-                                        this.drivers = JSON.parse(JSON.stringify(savedData.drivers));
-                                        this.currDrvIdx = 0;
-                                        console.log('✅ Restored', this.drivers.length, 'drivers from database');
-                                        // Re-render with restored data
-                                        this.renderSelectors();
-                                        this.refreshUI();
-
-                                        // --- Ensure gap calculation fields are set from driver data before recalculation ---
-                                        const drv = this.drivers[this.currDrvIdx];
-                                        const gapStartField = document.querySelector('[data-key="gapStart"]');
-                                        const gapEndField = document.querySelector('[data-key="gapEnd"]');
-                                        if (gapStartField) {
-                                            gapStartField.value = drv.gapStart || '';
-                                            console.log('[GAP RESTORE] Set gapStart input from driver data:', drv.gapStart);
-                                        }
-                                        if (gapEndField) {
-                                            gapEndField.value = drv.gapEnd || '';
-                                            console.log('[GAP RESTORE] Set gapEnd input from driver data:', drv.gapEnd);
-                                        }
-
-                                        // Explicitly recalculate insurance gap after restoring fields
-                                        setTimeout(() => {
-                                            console.log('[GAP RESTORE] About to recalculate insurance gap with:', {
-                                                gapStart: gapStartField?.value,
-                                                gapEnd: gapEndField?.value
-                                            });
-                                            this.calcInsuranceGap();
-                                        }, 0);
-                                        console.log('✅ UI refreshed with restored data and insurance gap recalculated');
-                                    }
-                                } else {
-                                    console.log('⚠️ No data to restore from database');
-                                }
-                            })
-                            .catch(error => {
-                                console.error('❌ Error fetching saved data:', error);
-                            });
-                    }, 500); // Give page a moment to fully load first
-                }
+                // Verify values are set correctly
+                setTimeout(() => {
+                    const searchInput = document.getElementById('client-search');
+                    const phoneInput = document.querySelector('[data-key="personalMobile"]');
+                    const emailInput = document.querySelector('[data-key="personalEmail"]');
+                    
+                    console.log('🔍 FINAL VERIFICATION:');
+                    console.log('  Search:', searchInput?.value || '(empty)', '(expected:', name, ')');
+                    console.log('  Phone:', phoneInput?.value || '(empty)', '(expected:', phone, ')');
+                    console.log('  Email:', emailInput?.value || '(empty)', '(expected:', email, ')');
+                }, 300);
             },
 
             handleGlobalEvent: function(e) {
@@ -2588,12 +2630,14 @@
             
             selectLead: async function(name, phone, email, leadId) {
                 console.log('👤 Selecting lead:', {name, phone, email, leadId});
+                
                 // Populate search box with name
                 const searchInput = document.getElementById('client-search');
                 if (searchInput) {
                     searchInput.value = name;
                     console.log('✅ Search box updated with:', name);
                 }
+                
                 // Store original lead info for search restore
                 this.originalLead = { name, phone, email, leadId };
                 localStorage.setItem('autoDashboardOriginalLead', JSON.stringify(this.originalLead));
@@ -2626,19 +2670,26 @@
                         this.currDrvIdx = 0;
                         foundData = true;
                     } else {
-                        console.log('ℹ️ No saved data found for this lead, resetting to blank/default.');
+                        console.log('ℹ️ No saved data found for this lead, creating fresh driver with clicked lead info.');
                     }
                 } catch (error) {
                     console.warn('⚠️ Could not load saved data:', error);
                 }
+                
                 if (!foundData) {
-                    // Reset to new client and populate with search lead info
+                    // Reset to new client and populate with CLICKED lead's phone and email
                     this.drivers = [this.createDriver(1)];
                     this.drivers[0].mainRel = 'Principal';
                     this.currDrvIdx = 0;
                     const drv = this.drivers[0];
-                    drv.personalEmail = email || '';
+                    
+                    // **IMPORTANT**: Set phone and email from the CLICKED lead
                     drv.personalMobile = phone || '';
+                    drv.personalEmail = email || '';
+                    
+                    console.log('📱 Phone from clicked lead:', phone);
+                    console.log('📧 Email from clicked lead:', email);
+                    
                     // Name and DOB are ONLY set from MVR, not from URL params or DASH
                     drv.personalName = '';  // Keep empty for MVR
                     drv.personalDob = '';   // Keep empty for MVR
@@ -2654,12 +2705,33 @@
                         if (key === 'convictions') drv.convictions = [];
                     });
                 }
+                
                 // Refresh UI with the loaded/new data
                 this.renderSelectors();
                 this.refreshUI();
+                
+                // **FORCE SET** - Ensure phone and email display the CLICKED lead's values
+                setTimeout(() => {
+                    const drv = this.drivers[this.currDrvIdx];
+                    const phoneInput = document.querySelector('[data-key="personalMobile"]');
+                    const emailInput = document.querySelector('[data-key="personalEmail"]');
+                    
+                    if (phoneInput && drv.personalMobile) {
+                        phoneInput.value = drv.personalMobile;
+                        phoneInput.dispatchEvent(new Event('input', { bubbles: true }));
+                        console.log('✅ Phone field set to:', drv.personalMobile);
+                    }
+                    
+                    if (emailInput && drv.personalEmail) {
+                        emailInput.value = drv.personalEmail;
+                        emailInput.dispatchEvent(new Event('input', { bubbles: true }));
+                        console.log('✅ Email field set to:', drv.personalEmail);
+                    }
+                }, 100);
+                
                 // Hide dropdown
                 document.getElementById('search-results').classList.add('hidden');
-                console.log(`✅ Lead selected and data loaded successfully!`);
+                console.log(`✅ Lead selected successfully!`);
             }
         };
 
