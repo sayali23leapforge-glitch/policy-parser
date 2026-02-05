@@ -152,6 +152,51 @@ def parse_meta_lead(meta_lead):
         lead_dict[field_name] = field_values[0] if field_values else ''
     
     meta_lead_id = meta_lead.get('id')
+
+    def normalize_key(value):
+        if not value:
+            return ''
+        cleaned = ''.join(ch if ch.isalnum() or ch.isspace() else ' ' for ch in str(value).lower())
+        cleaned = ' '.join(cleaned.replace('_', ' ').split())
+        return cleaned
+
+    def normalize_value(value):
+        if not isinstance(value, str):
+            return value
+        if '_' in value and ' ' not in value:
+            return value.replace('_', ' ')
+        return value
+
+    normalized_lookup = {}
+    for key, value in lead_dict.items():
+        normalized_lookup[normalize_key(key)] = value
+
+    target_keys = [
+        "when did you first receive your g or g2 driver's licence",
+        "when did you first receive your g or g2 drivers licence",
+        "when did you first receive your g or g2 driver's license",
+        "when did you first receive your g or g2 drivers license",
+        "driver license received",
+        "driver licence received",
+        "g or g2 driver license",
+        "g or g2 driver licence",
+        "driver_license_received",
+    ]
+
+    driver_license_answer = ''
+    for key in target_keys:
+        normalized_key = normalize_key(key)
+        if normalized_key in normalized_lookup:
+            driver_license_answer = normalized_lookup.get(normalized_key, '')
+            break
+
+    if not driver_license_answer:
+        for normalized_key, value in normalized_lookup.items():
+            if 'g or g2' in normalized_key and 'driver' in normalized_key and ('licence' in normalized_key or 'license' in normalized_key):
+                driver_license_answer = value
+                break
+
+    driver_license_answer = normalize_value(driver_license_answer)
     
     return {
         # Don't set 'id' - let database auto-generate it
@@ -169,7 +214,8 @@ def parse_meta_lead(meta_lead):
         'premium': 0,
         'sync_status': 'Not Synced',
         'sync_signal': False,
-        'notes': ''
+        'notes': '',
+        'driver_license_received': driver_license_answer
         # Removed: company, address, city, state, country, zip_code - not in database schema
     }
 
@@ -225,15 +271,20 @@ def send_event_to_meta(lead_id, event_type, event_data):
     try:
         url = f'{META_BASE_URL}/{FB_PIXEL_ID}/events'
         
+        # Hash email and phone for Meta
+        em_hash = event_data.get('email', '').lower().strip()
+        ph_hash = event_data.get('phone', '').lower().strip()
+        fn_hash = event_data.get('name', '').lower().strip().split()[0] if event_data.get('name') else ''
+        
         payload = {
             'data': [
                 {
                     'event_name': event_type,  # 'Purchase', 'Lead', 'ViewContent', etc
                     'event_time': int(datetime.utcnow().timestamp()),
                     'user_data': {
-                        'em': event_data.get('email', ''),  # hashed email
-                        'ph': event_data.get('phone', ''),  # hashed phone
-                        'fn': event_data.get('name', ''),   # hashed first name
+                        'em': em_hash,  # hashed email
+                        'ph': ph_hash,  # hashed phone
+                        'fn': fn_hash,   # hashed first name
                     },
                     'custom_data': {
                         'value': event_data.get('premium', 0),
@@ -246,13 +297,30 @@ def send_event_to_meta(lead_id, event_type, event_data):
             'access_token': META_PAGE_ACCESS_TOKEN
         }
         
+        print(f"📡 Sending to Meta Conversions API...")
+        print(f"   URL: {url}")
+        print(f"   Event: {event_type}")
+        print(f"   Email: {em_hash[:3]}***@***.***")
+        print(f"   Phone: ***{ph_hash[-4:] if ph_hash else 'N/A'}")
+        print(f"   Premium: ${event_data.get('premium', 0)}")
+        
         response = requests.post(url, json=payload)
         response.raise_for_status()
         
-        return response.json()
+        result = response.json()
+        print(f"✅ Meta API Response: {result}")
+        return result
     
+    except requests.exceptions.RequestException as e:
+        print(f"❌ HTTP Error sending to Meta: {str(e)}")
+        print(f"   Status: {e.response.status_code if hasattr(e, 'response') else 'N/A'}")
+        if hasattr(e, 'response'):
+            print(f"   Response: {e.response.text}")
+        return {'success': False, 'error': str(e)}
     except Exception as e:
-        print(f"Error sending event to Meta: {str(e)}")
+        print(f"❌ Error sending event to Meta: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return {'success': False, 'error': str(e)}
 
 
@@ -492,6 +560,20 @@ def sync_lead_event(lead_id):
         if not lead:
             return jsonify({'success': False, 'error': 'Lead not found'}), 404
         
+        # Log sync initiation
+        print(f"\n{'='*60}")
+        print(f"🔔 SYNCING LEAD TO FACEBOOK EVENT MANAGER")
+        print(f"{'='*60}")
+        print(f"📋 Lead ID: {lead_id}")
+        print(f"👤 Name: {lead.get('name', 'N/A')}")
+        print(f"📧 Email: {lead.get('email', 'N/A')}")
+        print(f"📞 Phone: {lead.get('phone', 'N/A')}")
+        print(f"💰 Premium: ${lead.get('premium', 0)}")
+        print(f"📍 Event Type: {event_type}")
+        print(f"⏰ Timestamp: {datetime.utcnow().isoformat()}")
+        print(f"🎯 Destination Pixel ID: {FB_PIXEL_ID}")
+        print(f"🔗 Events Manager URL: https://business.facebook.com/events_manager2/list/pixel/{FB_PIXEL_ID}/test_events")
+        
         # Send to Meta
         event_data = {
             'email': lead.get('email', ''),
@@ -501,15 +583,17 @@ def sync_lead_event(lead_id):
             'source_url': request.host_url
         }
         
+        print(f"📤 Sending to Meta Conversions API...")
         result = send_event_to_meta(lead_id, event_type, event_data)
         
         # Update lead sync timestamp and status
+        sync_status = 'sent' if result and 'events' in result else 'failed'
         supabase.table('leads').update({
             'last_sync': datetime.utcnow().isoformat(),
-            'sync_status': 'sent' if result else 'failed'
+            'sync_status': sync_status
         }).eq('id', lead_id).execute()
         
-        # Log sync event
+        # Log sync event to database
         supabase.table('sync_events').insert({
             'lead_id': lead_id,
             'event_type': event_type,
@@ -517,14 +601,34 @@ def sync_lead_event(lead_id):
             'created_at': datetime.utcnow().isoformat()
         }).execute()
         
+        # Log confirmation
+        print(f"{'─'*60}")
+        print(f"✅ SYNC CONFIRMATION")
+        print(f"{'─'*60}")
+        print(f"✨ Lead '{lead.get('name')}' successfully queued for Meta Event Manager")
+        print(f"📊 Meta API Response: {result}")
+        print(f"💾 Sync Status: {sync_status}")
+        print(f"🔗 Lead saved to sync_events table for tracking")
+        print(f"⏱️  Confirmed at: {datetime.utcnow().isoformat()}")
+        print(f"{'='*60}\n")
+        
         return jsonify({
             'success': True,
             'message': f'Event "{event_type}" sent to Meta Event Manager',
-            'meta_response': result
+            'meta_response': result,
+            'lead_name': lead.get('name'),
+            'lead_email': lead.get('email'),
+            'sync_timestamp': datetime.utcnow().isoformat()
         }), 200
     
     except Exception as e:
-        print(f"Error syncing lead event: {str(e)}")
+        print(f"\n{'='*60}")
+        print(f"❌ SYNC FAILED")
+        print(f"{'='*60}")
+        print(f"Error syncing lead event {lead_id}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        print(f"{'='*60}\n")
         return jsonify({'success': False, 'error': str(e)}), 500
 
 

@@ -444,10 +444,11 @@
                 <div class="relative">
                     <select class="status-select w-full h-8 pl-2 pr-7 bg-white border border-slate-200 text-slate-700 text-[11px] font-semibold rounded-lg focus:ring-2 focus:ring-indigo-500/10 focus:border-indigo-500 appearance-none cursor-pointer">
                         <option value="New Lead">New Lead</option>
-                        <option value="Contacted">Contacted</option>
-                        <option value="Quote Sent">Quote Sent</option>
-                        <option value="In Followup">In Followup</option>
-                        <option value="No Response">No Response</option>
+                        <option value="Qualified">Qualified</option>
+                        <option value="Unqualified">Unqualified</option>
+                        <option value="Called">Called</option>
+                        <option value="Didn't Pickup">Didn't Pickup</option>
+                        <option value="Asked to call back">Asked to call back</option>
                         <option value="Closed Won">Closed Won</option>
                         <option value="Closed Lost">Closed Lost</option>
                     </select>
@@ -512,6 +513,10 @@
         // ========== BACKEND CONFIG ==========
         const BACKEND_URL = window.location.origin; // Use same domain for API calls
         
+        // ========== GOOGLE CONTACTS CONFIG ==========
+        const GOOGLE_CLIENT_ID = '780511047670-gcs7iv3pnb3798c1qa1rf44u7l803mtr.apps.googleusercontent.com';
+        const GOOGLE_CONTACTS_SCOPE = 'https://www.googleapis.com/auth/contacts';
+        
         // ========== SUPABASE SETUP ==========
         const SUPABASE_URL = 'https://iollfvjduazbmccxtsdn.supabase.co';
         const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlvbGxmdmpkdWF6Ym1jY3h0c2RuIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg1NTIzNzEsImV4cCI6MjA4NDEyODM3MX0.d_k31U0zY5bMWx_fTlJGLD4AjVU-FAu6Xkk7AOnpTUk';
@@ -563,6 +568,9 @@
                 };
                 
                 this.datePickerInstance = null; // Store main dashboard picker instance
+                this.googleTokenClient = null;
+                this.googleAccessToken = null;
+                this.googleSaveContext = null;
 
                 // Cache DOM Elements
                 this.dom = {
@@ -609,6 +617,9 @@
                 this.bindEvents();
                 this.initDatePickers(); // Init global pickers like view date
                 this.setupDateShortcuts(); // Init date shortcuts
+                
+                // Wait for Google API to load before initializing
+                setTimeout(() => this.initGoogleContacts(), 1000);
 
                 // IMPORTANT: Load existing leads on STARTUP ONLY
                 // Facebook leads load from Meta API; manual leads load from database
@@ -621,6 +632,53 @@
                 // Connect to WebSocket for REAL-TIME lead push from webhook
                 this.startAutoRefresh(); // Setup WebSocket listener for new leads
                 console.log('✅ Dashboard init() completed');
+            }
+
+            initGoogleContacts() {
+                console.log('🔍 Checking Google API availability...');
+                console.log('  - window.google:', !!window.google);
+                console.log('  - window.google.accounts:', !!(window.google && window.google.accounts));
+                console.log('  - window.google.accounts.oauth2:', !!(window.google && window.google.accounts && window.google.accounts.oauth2));
+                console.log('  - GOOGLE_CLIENT_ID:', GOOGLE_CLIENT_ID);
+                
+                if (!GOOGLE_CLIENT_ID) {
+                    console.error('❌ Google Client ID not configured');
+                    return;
+                }
+                
+                if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
+                    console.error('❌ Google Identity Services not loaded. Make sure you are on HTTPS or authorized localhost.');
+                    return;
+                }
+                
+                try {
+                    this.googleTokenClient = window.google.accounts.oauth2.initTokenClient({
+                        client_id: GOOGLE_CLIENT_ID,
+                        scope: GOOGLE_CONTACTS_SCOPE,
+                        callback: (resp) => {
+                            console.log('📥 Google OAuth callback received:', resp);
+                            if (!resp || resp.error) {
+                                console.error('❌ Google OAuth error:', resp);
+                                this.handleGoogleError(this.googleSaveContext?.btn, 'Google authorization failed');
+                                return;
+                            }
+                            this.googleAccessToken = resp.access_token;
+                            console.log('✅ Google access token received');
+                            console.log('📋 Context before creating contact:', this.googleSaveContext);
+                            const ctx = this.googleSaveContext;
+                            this.googleSaveContext = null;
+                            if (ctx) {
+                                console.log('🚀 Calling createGoogleContact with context:', ctx);
+                                this.createGoogleContact(ctx, resp.access_token);
+                            } else {
+                                console.error('❌ No context saved! Cannot create contact.');
+                            }
+                        }
+                    });
+                    console.log('✅ Google Token Client initialized');
+                } catch (error) {
+                    console.error('❌ Failed to initialize Google Token Client:', error);
+                }
             }
             sortLeadsByDate() {
                 this.state.leads.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
@@ -1198,6 +1256,13 @@
                 row.querySelector('.lead-email').textContent = lead.email;
                 const cleanPhone = lead.phone ? lead.phone.replace(/\D/g, '') : '';
                 row.querySelector('.lead-phone-link').href = `tel:${cleanPhone}`;
+                
+                // Restore Google save status
+                const googleBtn = row.querySelector('.action-save-google');
+                if (this.isContactSavedToGoogle(lead.id)) {
+                    googleBtn.innerHTML = '<i class="fa-solid fa-check text-[10px] text-emerald-500 pointer-events-none"></i>';
+                    googleBtn.classList.add('bg-emerald-50', 'border-emerald-200');
+                }
 
                 // Status Column
                 row.querySelector('.status-select').value = lead.status;
@@ -1246,6 +1311,10 @@
                 if (lead.isManual || lead.is_manual) {
                     badge.textContent = 'Manual Lead';
                     badge.className = 'lead-id-badge text-[10px] font-bold mt-1 px-2 py-1 rounded border w-fit ml-7 bg-yellow-100 text-yellow-700 border-yellow-300';
+                } else if (lead.driver_license_received) {
+                    // Display the driver's license received answer as plain text
+                    badge.textContent = lead.driver_license_received;
+                    badge.className = 'lead-id-badge text-[10px] font-normal mt-1 ml-7 text-slate-500';
                 } else {
                     badge.textContent = `ID: #${lead.id}`;
                     badge.className = 'lead-id-badge text-[10px] font-mono mt-1 px-1.5 py-0.5 rounded border w-fit ml-7 text-slate-400 bg-slate-50 border-slate-100';
@@ -1873,6 +1942,26 @@
                 const redBtn = row.querySelector('.action-signal-red');
                 const syncBtn = row.querySelector('.action-sync');
                 
+                // Update UI locally
+                if (type === 'green') {
+                    greenBtn.className = "action-signal-green w-9 py-1 rounded-md text-[9px] font-bold transition-all bg-emerald-100 text-emerald-700 shadow-inner";
+                    redBtn.className = "action-signal-red w-9 py-1 rounded-md text-[9px] font-bold transition-all text-slate-300 hover:text-rose-600";
+                    syncBtn.disabled = false;
+                    syncBtn.className = "action-sync w-full h-7 bg-blue-600 hover:bg-blue-700 text-white rounded text-[9px] font-bold shadow-sm transition-all flex items-center justify-center gap-1";
+                    syncBtn.innerHTML = '<i class="fa-brands fa-meta pointer-events-none"></i> Sync';
+                } else {
+                    greenBtn.className = "action-signal-green w-9 py-1 rounded-md text-[9px] font-bold transition-all text-slate-300 hover:text-emerald-600";
+                    redBtn.className = "action-signal-red w-9 py-1 rounded-md text-[9px] font-bold transition-all bg-rose-100 text-rose-700 shadow-inner";
+                    syncBtn.disabled = true;
+                    syncBtn.className = "action-sync w-full h-7 bg-slate-100 text-slate-400 border border-slate-200 rounded text-[9px] font-bold flex items-center justify-center gap-1 cursor-not-allowed";
+                    syncBtn.innerHTML = 'No Sync';
+                }
+                
+                // Skip API call if leadId is undefined/null/empty
+                if (!leadId || leadId === 'undefined' || leadId === 'null') {
+                    return;
+                }
+                
                 // Send to backend
                 fetch(`${BACKEND_URL}/api/leads/${leadId}/signal`, {
                     method: 'POST',
@@ -1881,19 +1970,7 @@
                 })
                 .then(res => res.json())
                 .then(result => {
-                    if (type === 'green') {
-                        greenBtn.className = "action-signal-green w-9 py-1 rounded-md text-[9px] font-bold transition-all bg-emerald-100 text-emerald-700 shadow-inner";
-                        redBtn.className = "action-signal-red w-9 py-1 rounded-md text-[9px] font-bold transition-all text-slate-300 hover:text-rose-600";
-                        syncBtn.disabled = false;
-                        syncBtn.className = "action-sync w-full h-7 bg-blue-600 hover:bg-blue-700 text-white rounded text-[9px] font-bold shadow-sm transition-all flex items-center justify-center gap-1";
-                        syncBtn.innerHTML = '<i class="fa-brands fa-meta pointer-events-none"></i> Sync';
-                    } else {
-                        greenBtn.className = "action-signal-green w-9 py-1 rounded-md text-[9px] font-bold transition-all text-slate-300 hover:text-emerald-600";
-                        redBtn.className = "action-signal-red w-9 py-1 rounded-md text-[9px] font-bold transition-all bg-rose-100 text-rose-700 shadow-inner";
-                        syncBtn.disabled = true;
-                        syncBtn.className = "action-sync w-full h-7 bg-slate-100 text-slate-400 border border-slate-200 rounded text-[9px] font-bold flex items-center justify-center gap-1 cursor-not-allowed";
-                        syncBtn.innerHTML = 'No Sync';
-                    }
+                    // Backend sync successful
                 })
                 .catch(error => {
                     console.error('Error updating signal:', error);
@@ -1904,10 +1981,25 @@
                 if (btn.disabled) return;
                 const leadId = row.dataset.id;
                 const name = row.querySelector('.lead-name').textContent;
+                const phone = row.querySelector('.lead-phone').textContent;
+                const email = row.querySelector('.lead-email').textContent;
                 const timestampEl = row.querySelector('.sync-timestamp');
                 
                 btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin pointer-events-none"></i>';
                 btn.disabled = true;
+                
+                // Log confirmation details
+                console.log('🔔 SYNCING TO FACEBOOK EVENT MANAGER');
+                console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                console.log(`📋 Lead ID: ${leadId}`);
+                console.log(`👤 Name: ${name}`);
+                console.log(`📞 Phone: ${phone}`);
+                console.log(`📧 Email: ${email}`);
+                console.log(`⏰ Sync Time: ${new Date().toLocaleString()}`);
+                console.log(`📍 Destination: Facebook Event Manager (Conversions API)`);
+                console.log(`🎯 Event Type: Lead`);
+                console.log(`📊 Check events at: https://business.facebook.com/events_manager2`);
+                console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
                 
                 // Send event to Meta via backend
                 fetch(`${BACKEND_URL}/api/leads/${leadId}/sync-event`, {
@@ -1917,32 +2009,188 @@
                 })
                 .then(res => res.json())
                 .then(result => {
+                    console.log('✅ FACEBOOK SYNC CONFIRMED');
+                    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                    console.log(`✨ Lead successfully sent to Meta Event Manager`);
+                    console.log(`🔗 API Response:`, result);
+                    console.log(`📊 Meta Response Details:`, result.meta_response);
+                    console.log(`⏱️  Confirmation Time: ${new Date().toLocaleString()}`);
+                    console.log(`🎯 TO VERIFY IN FACEBOOK:`);
+                    console.log(`   1. Go to: https://business.facebook.com/events_manager2`);
+                    console.log(`   2. Click "Test Events" in left sidebar`);
+                    console.log(`   3. Look for "Lead" event with timestamp: ${new Date().toLocaleString()}`);
+                    console.log(`   4. Event should show: Email (${email}), Phone (${phone})`);
+                    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                    
                     btn.className = "action-sync w-full h-7 bg-emerald-50 text-emerald-600 border border-emerald-200 rounded text-[9px] font-bold flex items-center justify-center gap-1 cursor-default";
                     btn.innerHTML = '<i class="fa-solid fa-check pointer-events-none"></i> Sent';
                     const now = new Date();
                     timestampEl.textContent = `Sent: ${now.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`;
                     timestampEl.style.opacity = '1';
-                    this.showToast(`Lead "${name}" sent to Meta Event Manager`, 'success');
+                    
+                    // Show comprehensive confirmation toast
+                    this.showToast(`✅ "${name}" synced to Meta Event Manager`, 'success');
+                    
+                    // Optional: Show detailed toast with lead info
+                    const detailToast = document.createElement('div');
+                    detailToast.className = "fixed bottom-24 right-4 bg-slate-800 text-white px-4 py-3 rounded-lg shadow-2xl text-[10px] font-mono space-y-1 border border-slate-700 max-w-xs z-50";
+                    detailToast.innerHTML = `
+                        <div class="text-emerald-400 font-bold">✨ Sync Confirmation</div>
+                        <div>Lead ID: <span class="text-blue-300">${leadId}</span></div>
+                        <div>Email: <span class="text-blue-300">${email}</span></div>
+                        <div>Phone: <span class="text-blue-300">${phone}</span></div>
+                        <div>Status: <span class="text-emerald-400">Sent to Event Manager</span></div>
+                        <div class="text-slate-400 mt-2">${new Date().toLocaleString()}</div>
+                        <a href="https://business.facebook.com/events_manager2" target="_blank" class="block mt-3 bg-blue-600 hover:bg-blue-700 text-white text-center py-1.5 rounded text-[9px] font-bold transition-colors">
+                            🔍 Verify in Events Manager →
+                        </a>
+                    `;
+                    document.body.appendChild(detailToast);
+                    setTimeout(() => {
+                        detailToast.style.opacity = '0';
+                        detailToast.style.transition = 'opacity 0.3s';
+                        setTimeout(() => detailToast.remove(), 300);
+                    }, 5000);
                 })
                 .catch(error => {
-                    console.error('Error:', error);
+                    console.error('❌ FACEBOOK SYNC FAILED');
+                    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                    console.error(`Error syncing lead ${leadId}:`, error);
+                    console.log(`Lead: ${name}`);
+                    console.log(`Email: ${email}`);
+                    console.log(`Phone: ${phone}`);
+                    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+                    
                     btn.className = "action-sync w-full h-7 bg-rose-50 text-rose-600 border border-rose-200 rounded text-[9px] font-bold flex items-center justify-center gap-1";
                     btn.innerHTML = '<i class="fa-solid fa-exclamation"></i> Failed';
-                    this.showToast('Failed to sync to Meta', 'error');
+                    this.showToast('❌ Failed to sync to Meta', 'error');
                     btn.disabled = false;
                 });
             }
 
             saveToGoogle(btn, row) {
-                const name = row.querySelector('.lead-name').textContent;
+                const name = (row.querySelector('.lead-name')?.textContent || '').trim();
+                const phone = (row.querySelector('.lead-phone')?.textContent || '').trim();
+                const email = (row.querySelector('.lead-email')?.textContent || '').trim();
+
+                if (!name && !phone && !email) {
+                    this.showToast('No contact info to save', 'error');
+                    return;
+                }
+
                 btn.innerHTML = '<i class="fa-solid fa-circle-notch fa-spin text-[10px] text-blue-500 pointer-events-none"></i>';
                 btn.classList.add('bg-blue-50', 'border-blue-200');
+
+                if (!this.googleTokenClient) {
+                    console.error('❌ Google Token Client not initialized');
+                    this.handleGoogleError(btn, 'Google Contacts not configured. Check console for details.');
+                    return;
+                }
+
+                const contact = {
+                    names: name ? [{ displayName: name, givenName: name }] : [],
+                    phoneNumbers: phone ? [{ value: phone }] : [],
+                    emailAddresses: email ? [{ value: email }] : []
+                };
+
+                // If we already have a token, use it directly
+                if (this.googleAccessToken) {
+                    console.log('✅ Using existing access token');
+                    const ctx = { btn, name, contact };
+                    this.createGoogleContact(ctx, this.googleAccessToken);
+                    return;
+                }
+
+                // Otherwise, request authorization
+                console.log('🚀 Requesting Google OAuth token...');
+                this.googleSaveContext = { btn, name, contact, timestamp: Date.now() };
+                
+                try {
+                    this.googleTokenClient.requestAccessToken({ prompt: 'consent' });
+                    console.log('📤 Token request sent');
+                } catch (error) {
+                    console.error('❌ Error requesting access token:', error);
+                    this.handleGoogleError(btn, 'Failed to request Google authorization');
+                    return;
+                }
+                
+                // Extended timeout to 60 seconds for user to complete authorization
                 setTimeout(() => {
-                    btn.innerHTML = '<i class="fa-solid fa-check text-[10px] text-emerald-500 pointer-events-none"></i>';
-                    btn.classList.remove('bg-blue-50', 'border-blue-200');
-                    btn.classList.add('bg-emerald-50', 'border-emerald-200');
-                    this.showToast(`Saved ${name} to Google Contacts`, 'success');
-                }, 1000);
+                    if (this.googleSaveContext && this.googleSaveContext.btn === btn) {
+                        this.googleSaveContext = null;
+                        this.handleGoogleError(btn, 'Google authorization timed out - check if popup was blocked');
+                    }
+                }, 60000);
+            }
+
+            createGoogleContact(ctx, token) {
+                console.log('📤 Creating Google contact...');
+                console.log('Contact data:', ctx.contact);
+                console.log('Token (first 20 chars):', token.substring(0, 20) + '...');
+                
+                fetch('https://people.googleapis.com/v1/people:createContact', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify(ctx.contact)
+                })
+                .then(async (res) => {
+                    console.log('📥 Google API response status:', res.status);
+                    if (!res.ok) {
+                        const errText = await res.text();
+                        console.error('❌ Google API error response:', errText);
+                        throw new Error(errText || 'Failed to create contact');
+                    }
+                    return res.json();
+                })
+                .then((data) => {
+                    console.log('✅ Contact created successfully!', data);
+                    ctx.btn.innerHTML = '<i class="fa-solid fa-check text-[10px] text-emerald-500 pointer-events-none"></i>';
+                    ctx.btn.classList.remove('bg-blue-50', 'border-blue-200');
+                    ctx.btn.classList.add('bg-emerald-50', 'border-emerald-200');
+                    
+                    // Save to localStorage to persist across refreshes
+                    const leadId = ctx.btn.closest('tr').dataset.id;
+                    this.markContactAsSavedToGoogle(leadId);
+                    
+                    this.showToast(`✅ ${ctx.name} saved to Google Contacts!`, 'success');
+                })
+                .catch((error) => {
+                    console.error('❌ Google contact create failed:', error);
+                    console.error('Error details:', error.message);
+                    this.handleGoogleError(ctx.btn, 'Failed to save to Google - check console');
+                });
+            }
+
+            handleGoogleError(btn, message) {
+                if (btn) {
+                    btn.innerHTML = '<i class="fa-solid fa-user-plus text-[10px] pointer-events-none"></i>';
+                    btn.classList.remove('bg-blue-50', 'border-blue-200', 'bg-emerald-50', 'border-emerald-200');
+                }
+                this.showToast(message, 'error');
+            }
+
+            markContactAsSavedToGoogle(leadId) {
+                try {
+                    const saved = JSON.parse(localStorage.getItem('googleContactsSaved') || '[]');
+                    if (!saved.includes(leadId)) {
+                        saved.push(leadId);
+                        localStorage.setItem('googleContactsSaved', JSON.stringify(saved));
+                    }
+                } catch (e) {
+                    console.warn('Failed to save Google contacts status:', e);
+                }
+            }
+
+            isContactSavedToGoogle(leadId) {
+                try {
+                    const saved = JSON.parse(localStorage.getItem('googleContactsSaved') || '[]');
+                    return saved.includes(leadId);
+                } catch (e) {
+                    return false;
+                }
             }
 
             showToast(msg, type) {

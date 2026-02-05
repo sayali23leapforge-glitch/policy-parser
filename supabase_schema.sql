@@ -27,7 +27,8 @@ CREATE TABLE IF NOT EXISTS leads (
     sync_signal VARCHAR(20) DEFAULT 'green', -- 'green', 'red'
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW(),
-    meta_data JSONB
+    meta_data JSONB,
+    driver_license_received VARCHAR(255)
 );
 
 -- Create index for faster queries
